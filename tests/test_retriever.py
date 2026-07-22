@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from cleanbot.core.config import Settings
+from cleanbot.core.schemas import KnowledgeHit
+from cleanbot.rag.retriever import HybridRetriever
+
+
+def hit(chunk_id: str, content: str, dense: float = 0.0, sparse: float = 0.0) -> KnowledgeHit:
+    return KnowledgeHit(
+        document_id="doc",
+        chunk_id=chunk_id,
+        source="manual.txt",
+        content=content,
+        dense_score=dense,
+        sparse_score=sparse,
+        score=max(dense, sparse),
+    )
+
+
+class FakeKnowledgeBase:
+    def __init__(self) -> None:
+        self.chunks = [
+            hit("a", "主刷毛发缠绕，需要断电清理"),
+            hit("b", "水箱漏水时检查密封圈"),
+            hit("c", "电池鼓包应停止使用"),
+        ]
+
+    def count(self) -> int:
+        return len(self.chunks)
+
+    def all_chunks(self):
+        return [item.model_copy(deep=True) for item in self.chunks]
+
+    def dense_search(self, query: str, k: int):
+        return [hit("b", self.chunks[1].content, dense=0.8), hit("a", self.chunks[0].content, dense=0.7)][:k]
+
+
+def test_rrf_combines_dense_and_sparse_rankings() -> None:
+    dense = [hit("a", "A", dense=0.9), hit("b", "B", dense=0.7)]
+    sparse = [hit("b", "B", sparse=1.0), hit("c", "C", sparse=0.5)]
+    fused = HybridRetriever.fuse_rrf(dense, sparse)
+    assert fused[0].chunk_id == "b"
+    assert fused[0].dense_score == 0.7
+    assert fused[0].sparse_score == 1.0
+    assert fused[0].score == 1.0
+
+
+async def test_hybrid_retrieval_works_without_rerank(settings: Settings) -> None:
+    retriever = HybridRetriever(FakeKnowledgeBase(), settings)  # type: ignore[arg-type]
+    results = await retriever.retrieve("主刷毛发")
+    assert results
+    assert results[0].chunk_id == "a"
+    assert results[0].sparse_score > 0

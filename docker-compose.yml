@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cleanbot
+      POSTGRES_USER: cleanbot
+      POSTGRES_PASSWORD: cleanbot-dev-only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cleanbot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment:
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      DATABASE_URL: postgresql+psycopg://cleanbot:cleanbot-dev-only@postgres:5432/cleanbot
+      VECTOR_DIR: /app/.runtime/chroma
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me-before-deployment}
+    volumes:
+      - chroma_data:/app/.runtime/chroma
+      - ./data:/app/data:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build: .
+    command: ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  chroma_data:
+

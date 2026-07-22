@@ -1,0 +1,15 @@
+.git
+.idea
+.env
+.runtime
+.pytest_cache
+.ruff_cache
+__pycache__
+**/__pycache__
+**/chroma_db
+chroma_db
+logs
+reports/evaluation/*.json
+htmlcov
+.coverage
+

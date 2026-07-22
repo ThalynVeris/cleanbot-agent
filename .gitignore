@@ -1,0 +1,24 @@
+.DS_Store
+.idea/
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+*.egg-info/
+# Runtime state: regenerate with the CLI instead of committing it.
+.runtime/
+chroma_db/
+**/chroma_db/
+logs/
+*.log
+*.db
+*.sqlite3
+
+# Local evaluation output may contain model responses.
+reports/evaluation/*.json
+!reports/evaluation/.gitkeep
+

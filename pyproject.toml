@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cleanbot-agent"
+version = "0.2.0"
+description = "Evaluated LangGraph and hybrid-RAG customer service agent for cleaning robots"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "chromadb>=1.5,<2",
+  "dashscope>=1.25,<2",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "langchain>=1.3,<2",
+  "langchain-chroma>=1.1,<2",
+  "langchain-openai>=1.3,<2",
+  "langgraph>=1.2,<2",
+  "pydantic>=2.10,<3",
+  "pypdf>=6,<7",
+  "python-multipart>=0.0.20,<1",
+  "pyyaml>=6,<7",
+  "rank-bm25>=0.2.2,<1",
+  "sqlalchemy>=2.0,<3",
+  "streamlit>=1.58,<2",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2,<4"]
+dev = [
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.0,<2",
+  "pytest-cov>=6,<8",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+cleanbot = "cleanbot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cleanbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["cleanbot"]
+omit = ["cleanbot/api/*", "cleanbot/cli.py", "cleanbot/evaluation/__main__.py"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
