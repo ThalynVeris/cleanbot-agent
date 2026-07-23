@@ -82,6 +82,15 @@ class StoredMessage(BaseModel):
     created_at: datetime
 
 
+class ChatSessionSummary(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    message_count: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+
 class DemoUser(BaseModel):
     id: str
     display_name: str
