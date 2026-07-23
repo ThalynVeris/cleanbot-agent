@@ -84,6 +84,15 @@ with st.sidebar:
     labels = {f"{user['display_name']} · {user['city']}": user["id"] for user in users}
     selected_label = st.selectbox("用户", list(labels))
     user_id = labels[selected_label]
+
+    if "active_user_id" not in st.session_state:
+        st.session_state.active_user_id = user_id
+    elif st.session_state.active_user_id != user_id:
+        st.session_state.active_user_id = user_id
+        st.session_state.session_id = str(uuid.uuid4())
+        st.session_state.messages = []
+        st.rerun()
+
     months = api_get(f"/api/v1/demo/users/{user_id}/months")
     selected_month = st.selectbox("报告月份", months) if months else None
     st.caption(f"会话 ID：{st.session_state.session_id[:8]}…")
