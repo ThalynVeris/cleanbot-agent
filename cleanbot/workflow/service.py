@@ -9,7 +9,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from cleanbot.core.logging import get_logger
 from cleanbot.core.schemas import ChatEvent, ChatRequest, SourceRef
-from cleanbot.db.database import Database
+from cleanbot.db.database import Database, SessionOwnershipError
 from cleanbot.workflow.graph import CleanBotGraph
 
 logger = get_logger(__name__)
@@ -24,14 +24,15 @@ class AgentService:
     async def stream(self, request: ChatRequest) -> AsyncIterator[ChatEvent]:
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
-        self.database.ensure_session(request.session_id, request.user_id)
-        self.database.add_message(request.session_id, "user", request.message)
-
-        yield self._event("status", request_id, stage="routing", message="正在识别需求并加载会话")
         final_text = ""
         sources: list[SourceRef] = []
         intent = "unknown"
+
         try:
+            self.database.ensure_session(request.session_id, request.user_id)
+            self.database.add_message(request.session_id, "user", request.message)
+
+            yield self._event("status", request_id, stage="routing", message="正在识别需求并加载会话")
             state = await self.graph.prepare(
                 {
                     "session_id": request.session_id,
@@ -94,6 +95,13 @@ class AgentService:
                 intent=intent,
                 source_count=len(sources),
                 latency_ms=elapsed_ms,
+            )
+        except SessionOwnershipError as exc:
+            yield self._event(
+                "error",
+                request_id,
+                message="当前会话属于其他用户，请开始新会话后重试。",
+                error_type=type(exc).__name__,
             )
         except Exception as exc:
             fallback = "服务暂时无法完成本次请求，请稍后重试。错误已记录，但不会返回伪造结果。"

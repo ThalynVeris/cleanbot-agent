@@ -14,9 +14,7 @@ from cleanbot.workflow.service import AgentService
 class FakeModel:
     async def ainvoke(self, prompt):
         if "Classify the user's request" in prompt:
-            return AIMessage(
-                content='{"intent":"knowledge","reason":"cleaning robot follow-up"}'
-            )
+            return AIMessage(content='{"intent":"knowledge","reason":"cleaning robot follow-up"}')
         return AIMessage(content="宠物家庭主刷毛发缠绕")
 
     async def astream(self, prompt):
@@ -143,3 +141,20 @@ async def test_ten_concurrent_sessions_do_not_mix(settings: Settings) -> None:
         messages = database.get_messages(f"concurrent-{index:02d}")
         assert len(messages) == 2
         assert all(message.session_id == f"concurrent-{index:02d}" for message in messages)
+
+
+async def test_session_ownership_error_becomes_error_event(settings: Settings) -> None:
+    service, database, _ = create_service(settings)
+    database.ensure_session("shared-session", "1001")
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="shared-session",
+            user_id="1002",
+            message="继续刚才的问题",
+        ),
+    )
+    assert [event.event for event in events] == ["error"]
+    assert events[0].data["error_type"] == "SessionOwnershipError"
+    assert database.get_messages("shared-session") == []
