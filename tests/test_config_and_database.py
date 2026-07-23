@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from cleanbot.core.config import PROJECT_ROOT, Settings
-from cleanbot.db.database import Database
+from cleanbot.db.database import Database, SessionOwnershipError
 
 
 def test_project_root_is_independent_of_current_working_directory() -> None:
@@ -39,5 +39,5 @@ def test_session_cannot_move_between_users(settings: Settings) -> None:
     database.create_schema()
     database.seed_demo_data()
     database.ensure_session("session-fixed", "1001")
-    with pytest.raises(ValueError, match="cannot be reassigned"):
+    with pytest.raises(SessionOwnershipError, match="cannot be reassigned"):
         database.ensure_session("session-fixed", "1002")

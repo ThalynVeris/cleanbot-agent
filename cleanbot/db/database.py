@@ -34,6 +34,9 @@ DEMO_CITIES = {
 }
 
 
+class SessionOwnershipError(ValueError):
+    """Raised when a session is attempted to be reassigned to a different user."""
+
 class Database:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -160,7 +163,7 @@ class Database:
             if chat_session is None:
                 db.add(ChatSession(id=session_id, user_id=user_id))
             elif chat_session.user_id != user_id:
-                raise ValueError("A session cannot be reassigned to another user")
+                raise SessionOwnershipError("A session cannot be reassigned to another user")
 
     def add_message(
         self,
