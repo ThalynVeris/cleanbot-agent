@@ -14,7 +14,14 @@ from fastapi.responses import StreamingResponse
 
 from cleanbot.api.container import AppContainer, get_container
 from cleanbot.core.logging import configure_logging
-from cleanbot.core.schemas import ChatEvent, ChatRequest, DemoUser, IngestResult, StoredMessage
+from cleanbot.core.schemas import (
+    ChatEvent,
+    ChatRequest,
+    ChatSessionSummary,
+    DemoUser,
+    IngestResult,
+    StoredMessage,
+)
 from cleanbot.rag.knowledge_base import ALLOWED_SUFFIXES
 
 
@@ -97,6 +104,10 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     @app.get("/api/v1/demo/users", response_model=list[DemoUser], tags=["demo"])
     async def demo_users() -> list[DemoUser]:
         return await asyncio.to_thread(services().database.list_users)
+
+    @app.get("/api/v1/demo/users/{user_id}/sessions", response_model=list[ChatSessionSummary], tags=["demo"])
+    async def demo_sessions(user_id: str) -> list[ChatSessionSummary]:
+        return await asyncio.to_thread(services().database.list_sessions, user_id)
 
     @app.get("/api/v1/demo/users/{user_id}/months", response_model=list[str], tags=["demo"])
     async def demo_months(user_id: str) -> list[str]:

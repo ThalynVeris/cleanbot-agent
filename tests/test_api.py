@@ -101,3 +101,25 @@ def test_health_demo_chat_and_admin_knowledge_endpoints(settings: Settings) -> N
         )
         assert deleted.status_code == 200
         assert container.retriever.invalidations == 2
+
+
+def test_list_user_sessions_endpoint(settings: Settings) -> None:
+    container = FakeContainer(settings)
+    app = create_app(container)
+    with TestClient(app) as client:
+        container.database.ensure_session("api-session-list", "1001")
+        container.database.add_message(
+            "api-session-list",
+            "user",
+            "主刷被宠物毛发缠住怎么办？",
+        )
+        response = client.get("/api/v1/demo/users/1001/sessions")
+
+        assert response.status_code == 200
+        assert len(response.json()) == 1
+        assert response.json()[0]["id"] == "api-session-list"
+        assert response.json()[0]["title"] == "主刷被宠物毛发缠住怎么办？"
+
+        other_user = client.get("/api/v1/demo/users/1002/sessions")
+        assert other_user.status_code == 200
+        assert other_user.json() == []
