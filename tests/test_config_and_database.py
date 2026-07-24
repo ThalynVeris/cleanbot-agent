@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from cleanbot.core.config import PROJECT_ROOT, Settings
 from cleanbot.db.database import Database, SessionOwnershipError
+from cleanbot.db.models import ChatSession
 
 
 def test_project_root_is_independent_of_current_working_directory() -> None:
@@ -41,3 +43,54 @@ def test_session_cannot_move_between_users(settings: Settings) -> None:
     database.ensure_session("session-fixed", "1001")
     with pytest.raises(SessionOwnershipError, match="cannot be reassigned"):
         database.ensure_session("session-fixed", "1002")
+
+
+def test_list_sessions_is_user_scoped_and_builds_summary(settings: Settings) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    database.ensure_session("session-list-1001", "1001")
+    database.add_message("session-list-1001", "user", "主刷被宠物毛发缠住怎么办？")
+    database.add_message("session-list-1001", "assistant", "请断电后清理主刷。")
+
+    database.ensure_session("session-list-1002", "1002")
+    database.add_message("session-list-1002", "user", "这是另一个用户的问题")
+
+    sessions = database.list_sessions("1001")
+
+    assert len(sessions) == 1
+    assert sessions[0].id == "session-list-1001"
+    assert sessions[0].user_id == "1001"
+    assert sessions[0].title == "主刷被宠物毛发缠住怎么办？"
+    assert sessions[0].message_count == 2
+
+
+def test_new_message_moves_session_to_front(settings: Settings) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    database.ensure_session("session-older", "1001")
+    database.ensure_session("session-newer", "1001")
+
+    with database.session() as db:
+        older = db.get(ChatSession, "session-older")
+        newer = db.get(ChatSession, "session-newer")
+
+        assert older is not None
+        assert newer is not None
+
+        older.updated_at = datetime(2020, 1, 1)
+        newer.updated_at = datetime(2021, 1, 1)
+
+    sessions = database.list_sessions("1001")
+    assert [item.id for item in sessions] == ["session-newer", "session-older"]
+
+    database.add_message(
+        "session-older",
+        "user",
+        "这条消息应该让旧会话移动到最前面",
+    )
+    sessions = database.list_sessions("1001")
+    assert [item.id for item in sessions] == ["session-older", "session-newer"]

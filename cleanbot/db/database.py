@@ -7,10 +7,16 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import create_engine, delete, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from cleanbot.core.config import Settings, get_settings
-from cleanbot.core.schemas import DemoUser, DeviceReport, SourceRef, StoredMessage
+from cleanbot.core.schemas import (
+    ChatSessionSummary,
+    DemoUser,
+    DeviceReport,
+    SourceRef,
+    StoredMessage,
+)
 from cleanbot.db.models import (
     Base,
     ChatSession,
@@ -18,6 +24,7 @@ from cleanbot.db.models import (
     KnowledgeDocument,
     Message,
     User,
+    utc_now,
 )
 
 DEMO_CITIES = {
@@ -36,6 +43,7 @@ DEMO_CITIES = {
 
 class SessionOwnershipError(ValueError):
     """Raised when a session is attempted to be reassigned to a different user."""
+
 
 class Database:
     def __init__(self, settings: Settings | None = None) -> None:
@@ -165,6 +173,38 @@ class Database:
             elif chat_session.user_id != user_id:
                 raise SessionOwnershipError("A session cannot be reassigned to another user")
 
+    def list_sessions(self, user_id: str) -> list[ChatSessionSummary]:
+        with self.session() as db:
+            rows = db.scalars(
+                select(ChatSession)
+                .options(selectinload(ChatSession.messages))
+                .where(ChatSession.user_id == user_id)
+                .order_by(ChatSession.updated_at.desc())
+            ).all()
+
+            summaries: list[ChatSessionSummary] = []
+
+            for chat_session in rows:
+                title = "新会话"
+
+                for message in chat_session.messages:
+                    if message.role == "user":
+                        title = message.content[:40]
+                        break
+
+                summaries.append(
+                    ChatSessionSummary(
+                        id=chat_session.id,
+                        user_id=chat_session.user_id,
+                        title=title,
+                        message_count=len(chat_session.messages),
+                        created_at=chat_session.created_at,
+                        updated_at=chat_session.updated_at,
+                    )
+                )
+
+            return summaries
+
     def add_message(
         self,
         session_id: str,
@@ -176,6 +216,11 @@ class Database:
             [source.model_dump(mode="json") for source in (sources or [])], ensure_ascii=False
         )
         with self.session() as db:
+            chat_session = db.get(ChatSession, session_id)
+
+            if chat_session is None:
+                raise ValueError(f"Unknown chat session: {session_id}")
+
             message = Message(
                 session_id=session_id,
                 role=role,
@@ -183,6 +228,7 @@ class Database:
                 sources_json=encoded_sources,
             )
             db.add(message)
+            chat_session.updated_at = utc_now()
             db.flush()
             db.refresh(message)
             return self._message_schema(message)
