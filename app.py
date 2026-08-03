@@ -19,6 +19,28 @@ def api_get(path: str) -> Any:
         return response.json()
 
 
+def load_session_messages(session_id: str) -> list[dict[str, Any]]:
+    stored_messages = api_get(f"/api/v1/sessions/{session_id}/messages")
+
+    return [
+        {
+            "role": message["role"],
+            "content": message["content"],
+            "sources": message.get("sources", []),
+        }
+        for message in stored_messages
+        if message["role"] in {"user", "assistant"}
+    ]
+
+
+def start_new_session(selector_key: str) -> None:
+    new_session_id = str(uuid.uuid4())
+
+    st.session_state.session_id = new_session_id
+    st.session_state.messages = []
+    st.session_state[selector_key] = new_session_id
+
+
 def show_sources(sources: list[dict[str, Any]]) -> None:
     if not sources:
         return
@@ -81,25 +103,83 @@ if not users:
 
 with st.sidebar:
     st.header("演示上下文")
+
     labels = {f"{user['display_name']} · {user['city']}": user["id"] for user in users}
     selected_label = st.selectbox("用户", list(labels))
     user_id = labels[selected_label]
 
-    if "active_user_id" not in st.session_state:
+    user_sessions = api_get(f"/api/v1/demo/users/{user_id}/sessions")
+    session_by_id = {session["id"]: session for session in user_sessions}
+
+    selector_key = f"session_selector_{user_id}"
+    user_changed = st.session_state.get("active_user_id") != user_id
+
+    if user_changed:
         st.session_state.active_user_id = user_id
-    elif st.session_state.active_user_id != user_id:
-        st.session_state.active_user_id = user_id
-        st.session_state.session_id = str(uuid.uuid4())
-        st.session_state.messages = []
+
+        remembered_session_id = st.session_state.get(selector_key)
+
+        if remembered_session_id:
+            st.session_state.session_id = remembered_session_id
+        elif user_sessions:
+            st.session_state.session_id = user_sessions[0]["id"]
+        else:
+            st.session_state.session_id = str(uuid.uuid4())
+
+        if st.session_state.session_id in session_by_id:
+            st.session_state.messages = load_session_messages(st.session_state.session_id)
+        else:
+            st.session_state.messages = []
+
+        st.session_state[selector_key] = st.session_state.session_id
+        st.rerun()
+
+    session_ids = [session["id"] for session in user_sessions]
+
+    if st.session_state.session_id not in session_ids:
+        session_ids.insert(
+            0,
+            st.session_state.session_id,
+        )
+
+    session_labels = {
+        session["id"]: (f"{session['title']} · {session['message_count']} 条消息")
+        for session in user_sessions
+    }
+
+    if selector_key not in st.session_state:
+        st.session_state[selector_key] = st.session_state.session_id
+
+    selected_session_id = st.selectbox(
+        "会话",
+        session_ids,
+        format_func=lambda session_id: session_labels.get(
+            session_id,
+            "新会话",
+        ),
+        key=selector_key,
+    )
+
+    if selected_session_id != st.session_state.session_id:
+        st.session_state.session_id = selected_session_id
+
+        if selected_session_id in session_by_id:
+            st.session_state.messages = load_session_messages(selected_session_id)
+        else:
+            st.session_state.messages = []
+
         st.rerun()
 
     months = api_get(f"/api/v1/demo/users/{user_id}/months")
     selected_month = st.selectbox("报告月份", months) if months else None
+
     st.caption(f"会话 ID：{st.session_state.session_id[:8]}…")
-    if st.button("开始新会话"):
-        st.session_state.session_id = str(uuid.uuid4())
-        st.session_state.messages = []
-        st.rerun()
+
+    st.button(
+        "开始新会话",
+        on_click=start_new_session,
+        args=(selector_key,),
+    )
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
