@@ -21,9 +21,7 @@ async def test_deterministic_routes_do_not_require_model() -> None:
 async def test_model_fallback_parses_json_without_provider_structured_output() -> None:
     class JsonModel:
         async def ainvoke(self, prompt):
-            return AIMessage(
-                content='```json\n{"intent":"knowledge","reason":"product question"}\n```'
-            )
+            return AIMessage(content='```json\n{"intent":"knowledge","reason":"product question"}\n```')
 
     router = IntentRouter(JsonModel())  # type: ignore[arg-type]
     assert await router.classify("卧室用多大噪声合适") == Intent.KNOWLEDGE
@@ -38,18 +36,23 @@ async def test_weather_success(settings: Settings) -> None:
             json={
                 "current": {
                     "temperature_2m": 26.5,
+                    "apparent_temperature": 31.2,
                     "relative_humidity_2m": 70,
                     "wind_speed_10m": 8.0,
-                    "time": "2026-07-21T12:00",
+                    "time": "2026-07-21T12:15",
                 },
-                "hourly": {"precipitation_probability": [30]},
+                "hourly": {
+                    "time": ["2026-07-21T00:00", "2026-07-21T12:00"],
+                    "precipitation_probability": [10, 70],
+                },
             },
         )
 
     result = await WeatherClient(settings, httpx.MockTransport(handler)).current("上海")
     assert result.ok is True
     assert result.temperature_c == 26.5
-    assert result.precipitation_probability == 30
+    assert result.apparent_temperature_c == 31.2
+    assert result.precipitation_probability == 70
 
 
 async def test_weather_failure_is_explicit(settings: Settings) -> None:

@@ -211,10 +211,12 @@ History:
         sources = [hit.to_source() for hit in hits]
         context = self._format_hits(hits) if hits else "无补充知识资料"
         prompt = f"""结合实时天气和知识资料，为用户给出扫地机器人的环境使用建议。
-不要把天气数据说成设备传感器数据；知识结论标注 [来源N]；不输出内部推理。
+不要把天气数据说成设备传感器数据；必须区分实际温度和体感温度；
+说明天气数据的观测时间；知识结论标注 [来源N]；不输出内部推理。
 
 城市：{weather.city}
-温度：{weather.temperature_c} ℃
+实际温度：{weather.temperature_c}℃
+体感温度：{weather.apparent_temperature_c}℃
 相对湿度：{weather.relative_humidity} %
 降水概率：{weather.precipitation_probability} %
 风速：{weather.wind_speed_kmh} km/h

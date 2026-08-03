@@ -115,6 +115,7 @@ class WeatherResult(BaseModel):
     ok: bool
     city: str
     temperature_c: float | None = None
+    apparent_temperature_c: float | None = None
     relative_humidity: float | None = None
     precipitation_probability: float | None = None
     wind_speed_kmh: float | None = None

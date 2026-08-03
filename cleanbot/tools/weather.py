@@ -9,6 +9,22 @@ from cleanbot.core.config import Settings, get_settings
 from cleanbot.core.schemas import WeatherResult
 
 
+def _find_current_hour_probability(payload: dict[str, Any]) -> float | None:
+    current_time = str(payload["current"]["time"])
+    current_hour = current_time[:13]
+
+    hourly = payload.get("hourly", {})
+    times = hourly.get("time", [])
+    probabilities = hourly.get("precipitation_probability", [])
+
+    for time, probability in zip(times, probabilities, strict=False):
+        if str(time).startswith(current_hour):
+            if probability is None:
+                return None
+            return float(probability)
+    return None
+
+
 class WeatherClient:
     """Open-Meteo adapter. It uses live data and returns an explicit failure instead of fabricated weather."""
 
@@ -48,7 +64,10 @@ class WeatherClient:
                 params={
                     "latitude": location["latitude"],
                     "longitude": location["longitude"],
-                    "current": "temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m",
+                    "current": (
+                        "temperature_2m,apparent_temperature,"
+                        "relative_humidity_2m,precipitation,wind_speed_10m"
+                    ),
                     "hourly": "precipitation_probability",
                     "forecast_days": 1,
                     "timezone": "auto",
@@ -57,12 +76,12 @@ class WeatherClient:
             weather_response.raise_for_status()
             payload: dict[str, Any] = weather_response.json()
             current = payload["current"]
-            hourly_probability = payload.get("hourly", {}).get("precipitation_probability", [])
-            probability = float(hourly_probability[0]) if hourly_probability else None
+            probability = _find_current_hour_probability(payload)
             return WeatherResult(
                 ok=True,
                 city=city,
                 temperature_c=float(current["temperature_2m"]),
+                apparent_temperature_c=float(current["apparent_temperature"]),
                 relative_humidity=float(current["relative_humidity_2m"]),
                 precipitation_probability=probability,
                 wind_speed_kmh=float(current["wind_speed_10m"]),
