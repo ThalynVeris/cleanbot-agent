@@ -158,3 +158,10 @@ async def test_session_ownership_error_becomes_error_event(settings: Settings) -
     assert [event.event for event in events] == ["error"]
     assert events[0].data["error_type"] == "SessionOwnershipError"
     assert database.get_messages("shared-session") == []
+
+
+def test_environment_city_prefers_explicit_message_city() -> None:
+    assert CleanBotGraph._city_from_message("东京目前的天气怎么样", "上海") == "东京"
+    assert CleanBotGraph._city_from_message("请问北京现在天气如何", "上海") == "北京"
+    assert CleanBotGraph._city_from_message("今天的天气怎么样", "上海") == "上海"
+    assert CleanBotGraph._city_from_message("根据我所在城市的实时天气给建议", "上海") == "上海"

@@ -61,4 +61,4 @@ async def test_weather_failure_is_explicit(settings: Settings) -> None:
 
     result = await WeatherClient(settings, httpx.MockTransport(handler)).current("上海")
     assert result.ok is False
-    assert "ConnectError" in (result.error or "")
+    assert "网络、DNS 或 VPN 代理" in (result.error or "")

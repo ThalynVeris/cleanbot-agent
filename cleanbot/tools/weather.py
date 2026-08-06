@@ -41,13 +41,17 @@ class WeatherClient:
             try:
                 return await self._fetch(city)
             except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
+                last_error = self._error_message(exc)
                 if attempt == 0:
                     await asyncio.sleep(0.15)
         return WeatherResult(ok=False, city=city, error=last_error)
 
     async def _fetch(self, city: str) -> WeatherResult:
-        timeout = httpx.Timeout(self.settings.weather_timeout_seconds)
+        timeout_seconds = self.settings.weather_timeout_seconds
+        timeout = httpx.Timeout(
+            timeout_seconds,
+            connect=min(3.0, timeout_seconds),
+        )
         async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
             geo_response = await client.get(
                 self.GEOCODING_URL,
@@ -87,3 +91,12 @@ class WeatherClient:
                 wind_speed_kmh=float(current["wind_speed_10m"]),
                 observed_at=str(current["time"]),
             )
+
+    @staticmethod
+    def _error_message(exc: Exception) -> str:
+        if isinstance(exc, httpx.ConnectError):
+            return "无法连接 Open-Meteo，请检查网络、DNS 或 VPN 代理后重试"
+        if isinstance(exc, httpx.TimeoutException):
+            return "连接 Open-Meteo 超时，请检查网络或稍后重试"
+        details = str(exc).strip()
+        return f"{type(exc).__name__}: {details or '天气服务返回了无详细信息的错误'}"

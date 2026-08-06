@@ -197,7 +197,8 @@ History:
 
     async def _prepare_environment(self, state: AgentState) -> dict[str, Any]:
         user = self.database.get_user(state["user_id"])
-        city = user.city if user else ""
+        default_city = user.city if user else ""
+        city = self._city_from_message(state["message"], default_city)
         if not city:
             return {"sources": [], "direct_answer": "当前用户没有设置城市，无法查询实时环境数据。"}
         weather = await self.weather.current(city)
@@ -205,7 +206,9 @@ History:
             return {
                 "weather": weather,
                 "sources": [],
-                "direct_answer": f"实时天气服务暂时不可用（{weather.error}）。我不会用固定值冒充实时数据。",
+                "direct_answer": (
+                    f"暂时无法查询{weather.city}的实时天气（{weather.error}）。我不会用固定值冒充实时数据。"
+                ),
             }
         hits = await self.retriever.retrieve("潮湿 下雨 高温 环境 扫地机器人 使用 存放 保养")
         sources = [hit.to_source() for hit in hits]
@@ -258,6 +261,33 @@ History:
         if not exact:
             return None
         return f"{exact.group(1)}-{int(exact.group(2)):02d}"
+
+    @staticmethod
+    def _city_from_message(message: str, default_city: str) -> str:
+        weather_word = re.search(r"天气|气温|温度|湿度", message)
+        if weather_word is None:
+            return default_city
+
+        candidate = message[: weather_word.start()]
+        candidate = re.split(r"[，,。！？!?；;\s]", candidate)[-1]
+        candidate = re.sub(r"(?:目前|现在|今天|当日|实时|的)+$", "", candidate)
+        candidate = re.sub(
+            r"^(?:请问|查询|查一下|帮我查|帮我看看|看看|我想知道|想知道)",
+            "",
+            candidate,
+        )
+        relative_markers = ("所在城市", "当前城市", "本地", "当地", "这里", "室内", "室外", "空气")
+        if any(marker in candidate for marker in relative_markers):
+            return default_city
+        if "在" in candidate:
+            candidate = candidate.rsplit("在", maxsplit=1)[-1]
+        candidate = candidate.strip()
+
+        if not candidate:
+            return default_city
+        if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", candidate):
+            return candidate
+        return default_city
 
     @staticmethod
     def _format_hits(hits: list[KnowledgeHit]) -> str:
