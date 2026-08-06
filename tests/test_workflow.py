@@ -15,6 +15,8 @@ class FakeModel:
     async def ainvoke(self, prompt):
         if "Classify the user's request" in prompt:
             return AIMessage(content='{"intent":"knowledge","reason":"cleaning robot follow-up"}')
+        if "那木地板呢" in prompt and "不同地面" in prompt:
+            return AIMessage(content="木地板环境扫拖机器人维护")
         return AIMessage(content="宠物家庭主刷毛发缠绕")
 
     async def astream(self, prompt):
@@ -97,6 +99,27 @@ async def test_follow_up_uses_history_to_rewrite_query(settings: Settings) -> No
         ChatRequest(session_id="session-followup", user_id="1001", message="那宠物家庭呢？"),
     )
     assert retriever.queries[-1] == "宠物家庭主刷毛发缠绕"
+
+
+async def test_short_follow_up_becomes_standalone_query(settings: Settings) -> None:
+    service, _, retriever = create_service(settings)
+    await collect(
+        service,
+        ChatRequest(
+            session_id="session-floor-followup",
+            user_id="1001",
+            message="扫拖机器人在不同地面应该怎么维护？",
+        ),
+    )
+    await collect(
+        service,
+        ChatRequest(
+            session_id="session-floor-followup",
+            user_id="1001",
+            message="那木地板呢？",
+        ),
+    )
+    assert retriever.queries[-1] == "木地板环境扫拖机器人维护"
 
 
 async def test_report_uses_selected_month_and_missing_record_does_not_invent(settings: Settings) -> None:
