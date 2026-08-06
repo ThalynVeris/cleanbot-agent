@@ -18,6 +18,23 @@ async def test_deterministic_routes_do_not_require_model() -> None:
     assert await router.classify("写一个快速排序") == Intent.OUT_OF_SCOPE
 
 
+async def test_capability_questions_do_not_call_model() -> None:
+    class CountingModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, prompt):
+            self.calls += 1
+            return AIMessage(content='{"intent":"smalltalk","reason":"capability question"}')
+
+    model = CountingModel()
+    router = IntentRouter(model)  # type: ignore[arg-type]
+    for message in ("你能做什么", "有什么功能", "怎么使用这个客服？"):
+        assert await router.classify(message) == Intent.SMALLTALK
+    assert model.calls == 0
+    assert await router.classify("扫地机器人有哪些功能？") == Intent.KNOWLEDGE
+
+
 async def test_model_fallback_parses_json_without_provider_structured_output() -> None:
     class JsonModel:
         async def ainvoke(self, prompt):

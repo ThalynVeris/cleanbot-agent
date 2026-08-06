@@ -36,6 +36,17 @@ class IntentRouter:
         "噪音",
         "分贝",
     )
+    CAPABILITY_MESSAGES = {
+        "你能做什么",
+        "你会什么",
+        "你有什么功能",
+        "有什么功能",
+        "支持哪些功能",
+        "怎么使用",
+        "如何使用",
+        "怎么使用这个客服",
+        "如何使用这个客服",
+    }
     GREETINGS = {"你好", "您好", "hi", "hello", "在吗", "谢谢", "再见"}
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
@@ -47,6 +58,8 @@ class IntentRouter:
             return Intent.REPORT
         if any(word in message for word in self.WEATHER_WORDS):
             return Intent.ENVIRONMENT
+        if normalized in self.CAPABILITY_MESSAGES:
+            return Intent.SMALLTALK
         if normalized in self.GREETINGS:
             return Intent.SMALLTALK
         if any(word in message for word in self.ROBOT_WORDS):
