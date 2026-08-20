@@ -4,10 +4,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from cleanbot.core.config import PROJECT_ROOT, Settings
 from cleanbot.db.database import Database, SessionOwnershipError
-from cleanbot.db.models import ChatSession
+from cleanbot.db.models import ChatSession, Message
 
 
 def test_project_root_is_independent_of_current_working_directory() -> None:
@@ -94,3 +96,73 @@ def test_new_message_moves_session_to_front(settings: Settings) -> None:
     )
     sessions = database.list_sessions("1001")
     assert [item.id for item in sessions] == ["session-older", "session-newer"]
+
+
+def test_session_messages_relationship_and_delete_cascade(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    database.ensure_session("session-relations", "1001")
+    database.add_message(
+        "session-relations",
+        "user",
+        "第一条消息",
+    )
+    database.add_message(
+        "session-relations",
+        "assistant",
+        "第二条消息",
+    )
+
+    with database.session() as db:
+        chat_session = db.scalar(
+            select(ChatSession)
+            .options(selectinload(ChatSession.messages))
+            .where(ChatSession.id == "session-relations")
+        )
+
+        assert chat_session is not None
+        assert chat_session.user_id == "1001"
+        assert chat_session.user.id == "1001"
+        assert [message.content for message in chat_session.messages] == [
+            "第一条消息",
+            "第二条消息",
+        ]
+        assert all(
+            message.session is chat_session
+            for message in chat_session.messages
+        )
+
+        db.delete(chat_session)
+
+    with database.session() as db:
+        deleted_session = db.get(ChatSession, "session-relations")
+        remaining_messages = db.scalars(
+            select(Message).where(
+                Message.session_id == "session-relations"
+            )
+        ).all()
+
+        assert deleted_session is None
+        assert remaining_messages == []
+
+
+def test_database_session_rolls_back_when_block_raises(settings: Settings) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    with pytest.raises(RuntimeError, match="force rollback"):
+        with database.session() as db:
+            chat_session = ChatSession(id="rollback-session", user_id="1001")
+            db.add(chat_session)
+            db.flush()
+
+            assert db.get(ChatSession, "rollback-session") is not None
+            raise RuntimeError("force rollback")
+
+    with database.session() as db:
+        assert db.get(ChatSession, "rollback-session") is None
