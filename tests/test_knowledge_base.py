@@ -50,16 +50,21 @@ def test_ingest_update_idempotency_and_delete(settings: Settings, tmp_path: Path
     source.write_text("1. 主刷被毛发缠绕；请清理主刷。\n\n2. 尘盒满了；请清空尘盒。", encoding="utf-8")
 
     created = knowledge.ingest_path(source)
+    old_chunk_ids = set(store.documents)
     unchanged = knowledge.ingest_path(source)
     assert created.status == "created"
     assert unchanged.status == "unchanged"
     assert knowledge.count() == 2
-
+    assert set(store.documents) == old_chunk_ids
     source.write_text("1. 主刷被毛发缠绕；请断电后清理。", encoding="utf-8")
     updated = knowledge.ingest_path(source)
+    new_chunk_ids = set(store.documents)
     assert updated.status == "updated"
     assert knowledge.count() == 1
     assert "断电" in knowledge.all_chunks()[0].content
+    assert created.document_id == updated.document_id
+    assert old_chunk_ids.isdisjoint(new_chunk_ids)
+    assert all("尘盒满了" not in chunk.content for chunk in knowledge.all_chunks())
 
     assert knowledge.delete_document(created.document_id) is True
     assert knowledge.delete_document(created.document_id) is False
