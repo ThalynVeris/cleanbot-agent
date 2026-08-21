@@ -151,7 +151,7 @@ History:
         }
 
     async def _prepare_report(self, state: AgentState) -> dict[str, Any]:
-        month = state.get("month") or self._month_from_message(state["message"])
+        month = self._month_from_message(state["message"]) or state.get("month")
         if month is None:
             available = self.database.list_months(state["user_id"])
             hint = "、".join(available[:4])
