@@ -15,6 +15,10 @@ class TextChunk:
 def split_structured_text(text: str, max_chars: int = 700, overlap_chars: int = 100) -> list[TextChunk]:
     """Split Chinese manuals without cutting the numbered FAQ entries whenever possible."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    # PDF text extraction often removes blank lines between sections. Make every
+    # Markdown heading start a paragraph so headings in the middle of a page can
+    # update the section instead of leaking into the previous numbered entry.
+    normalized = re.sub(r"(?m)(?=^#{1,6}\s+)", "\n\n", normalized).strip()
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n", normalized) if part.strip()]
     if not paragraphs:
         return []

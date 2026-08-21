@@ -45,6 +45,26 @@ def test_long_numbered_entry_uses_configured_overlap() -> None:
     assert all(chunk.section == "故障" for chunk in chunks)
 
 
+def test_headings_inside_pdf_style_text_update_sections() -> None:
+    text = """### 语音交互
+1. 支持语音控制。
+## 四、维护与保养类
+### 日常维护
+2. 滚刷缠绕毛发时应清理。
+### 故障处理
+3. 机器人被卡住时应断电检查。
+"""
+
+    chunks = split_structured_text(text)
+
+    assert [(chunk.section, chunk.text) for chunk in chunks] == [
+        ("语音交互", "1. 支持语音控制。"),
+        ("日常维护", "2. 滚刷缠绕毛发时应清理。"),
+        ("故障处理", "3. 机器人被卡住时应断电检查。"),
+    ]
+    assert all("###" not in chunk.text for chunk in chunks)
+
+
 def test_bm25_tokenizer_contains_chinese_bigrams_and_latin_words() -> None:
     tokens = tokenize_for_bm25("HEPA滤网堵塞 WiFi2.4G")
     assert "hepa" in tokens

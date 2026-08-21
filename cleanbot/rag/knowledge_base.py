@@ -16,7 +16,7 @@ from cleanbot.db.database import Database
 from cleanbot.rag.chunking import TextChunk, split_structured_text
 
 ALLOWED_SUFFIXES = {".txt", ".pdf"}
-INDEX_VERSION = "structured-chunks-v2"
+INDEX_VERSION = "structured-chunks-v3"
 
 
 class KnowledgeBase:
