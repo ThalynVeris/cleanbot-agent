@@ -77,9 +77,23 @@ def stream_answer(payload: dict[str, Any], sources: list[dict[str, Any]], status
                 elif event_type == "error":
                     raise RuntimeError(data.get("message", "服务暂时不可用"))
                 elif event_type == "done":
-                    status_box.caption(
-                        f"完成 · {data.get('intent', 'unknown')} · {data.get('latency_ms', 0)} ms"
-                    )
+                    first_token_ms = float(data.get("first_token_ms", 0) or 0)
+                    latency_ms = float(data.get("latency_ms", 0) or 0)
+                    answer_mode = "模型生成" if data.get("model_called") else "固定回答"
+
+                    parts = [
+                        "完成",
+                        str(data.get("intent", "unknown")),
+                        f"首字 {first_token_ms:.0f} ms",
+                        f"总计 {latency_ms:.0f} ms",
+                        answer_mode,
+                    ]
+
+                    token_usage = data.get("token_usage")
+                    if isinstance(token_usage, dict):
+                        parts.append(f"Token {token_usage.get('total_tokens', 0)}")
+
+                    status_box.caption(" · ".join(parts))
 
 
 st.set_page_config(page_title="CleanBot Agent", page_icon="🤖", layout="centered")

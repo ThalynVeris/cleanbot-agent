@@ -12,6 +12,9 @@ from cleanbot.workflow.service import AgentService
 
 
 class FakeModel:
+    def __init__(self) -> None:
+        self.stream_calls = 0
+
     async def ainvoke(self, prompt):
         if "Classify the user's request" in prompt:
             return AIMessage(content='{"intent":"knowledge","reason":"cleaning robot follow-up"}')
@@ -20,8 +23,12 @@ class FakeModel:
         return AIMessage(content="宠物家庭主刷毛发缠绕")
 
     async def astream(self, prompt):
+        self.stream_calls += 1
         yield AIMessageChunk(content="请断电后清理主刷")
-        yield AIMessageChunk(content="。[来源1]")
+        yield AIMessageChunk(
+            content="。[来源1]",
+            usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+        )
 
 
 class FakeRetriever:
@@ -82,6 +89,46 @@ async def test_knowledge_stream_has_sources_and_persists_messages(settings: Sett
     messages = database.get_messages("session-knowledge")
     assert [message.role for message in messages] == ["user", "assistant"]
     assert messages[-1].sources[0].source == "维护保养.txt"
+
+
+async def test_done_event_reports_generation_metrics(settings: Settings) -> None:
+    service, _, _ = create_service(settings)
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="metrics-generated",
+            user_id="1001",
+            message="扫地机器人主刷不转怎么办？",
+        ),
+    )
+    done = events[-1]
+    assert done.event == "done"
+    assert service.model.stream_calls == 1
+    assert done.data["model_called"] is True
+    assert done.data["first_token_ms"] >= 0
+    assert done.data["latency_ms"] >= done.data["first_token_ms"]
+    assert done.data["token_usage"] == {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+
+async def test_direct_answer_reports_no_generation_model_call(settings: Settings) -> None:
+    service, _, _ = create_service(settings)
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="metrics-direct-answer",
+            user_id="1001",
+            message="你能做什么？",
+        ),
+    )
+    text = "".join(event.data.get("text", "") for event in events if event.event == "token")
+    done = events[-1]
+    assert done.event == "done"
+    assert service.model.stream_calls == 0
+    assert done.data["model_called"] is False
+    assert done.data["first_token_ms"] >= 0
+    assert done.data["latency_ms"] >= done.data["first_token_ms"]
+    assert "token_usage" not in done.data
+    assert text == ("你好，我可以帮助你排查扫地机器人故障、查询使用维护知识，或生成指定月份的演示使用报告。")
 
 
 async def test_follow_up_uses_history_to_rewrite_query(settings: Settings) -> None:
@@ -147,6 +194,30 @@ async def test_report_uses_selected_month_and_missing_record_does_not_invent(set
     assert "不会生成推测报告" in text
     assert len(database.get_messages("session-report2")) == 2
 
+async def test_explicit_message_month_overrides_ui_default(
+    settings: Settings,
+) -> None:
+    service, _, _ = create_service(settings)
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="session-report-explicit",
+            user_id="1001",
+            message="生成用户 1001 在 2024-01 的使用报告",
+            month="2025-12",
+        ),
+    )
+
+    text = "".join(
+        event.data.get("text", "")
+        for event in events
+        if event.event == "token"
+    )
+
+    assert "2024-01" in text
+    assert "不会生成推测报告" in text
+    assert events[-1].data["model_called"] is False
 
 async def test_ten_concurrent_sessions_do_not_mix(settings: Settings) -> None:
     service, database, _ = create_service(settings)

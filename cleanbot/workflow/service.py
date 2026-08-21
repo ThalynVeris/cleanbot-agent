@@ -27,6 +27,9 @@ class AgentService:
         final_text = ""
         sources: list[SourceRef] = []
         intent = "unknown"
+        first_token_ms: float | None = None
+        model_called = False
+        token_usage: dict[str, int] | None = None
 
         try:
             self.database.ensure_session(request.session_id, request.user_id)
@@ -59,6 +62,8 @@ class AgentService:
             direct_answer = state.get("direct_answer")
             if direct_answer:
                 async for token in self._chunk_text(direct_answer):
+                    if first_token_ms is None:
+                        first_token_ms = round((time.perf_counter() - started) * 1000, 2)
                     final_text += token
                     yield self._event("token", request_id, text=token)
             else:
@@ -66,35 +71,53 @@ class AgentService:
                 if not prompt:
                     raise RuntimeError("Workflow did not produce an answer prompt")
                 yield self._event("status", request_id, stage="generating", message="正在生成有依据的回答")
+                model_called = True
                 async for chunk in self.model.astream(prompt):
+                    usage = self._token_usage(chunk)
+                    if usage is not None:
+                        token_usage = usage
                     token = self._message_text(chunk)
                     if token:
+                        if first_token_ms is None:
+                            first_token_ms = round((time.perf_counter() - started) * 1000, 2)
                         final_text += token
                         yield self._event("token", request_id, text=token)
 
             if not final_text.strip():
                 final_text = "服务没有生成有效内容，请稍后重试。"
+                if first_token_ms is None:
+                    first_token_ms = round(
+                        (time.perf_counter() - started) * 1000,
+                        2,
+                    )
                 yield self._event("token", request_id, text=final_text)
             self.database.add_message(request.session_id, "assistant", final_text, sources)
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+            if first_token_ms is None:
+                first_token_ms = elapsed_ms
+            completion_data: dict[str, Any] = {
+                "intent": intent,
+                "source_count": len(sources),
+                "first_token_ms": first_token_ms,
+                "latency_ms": elapsed_ms,
+                "model_called": model_called,
+            }
+            if token_usage is not None:
+                completion_data["token_usage"] = token_usage
             logger.info(
                 "request_completed",
                 extra={
                     "context": {
                         "request_id": request_id,
                         "session_id": request.session_id,
-                        "intent": intent,
-                        "source_count": len(sources),
-                        "latency_ms": elapsed_ms,
+                        **completion_data,
                     }
                 },
             )
             yield self._event(
                 "done",
                 request_id,
-                intent=intent,
-                source_count=len(sources),
-                latency_ms=elapsed_ms,
+                **completion_data,
             )
         except SessionOwnershipError as exc:
             yield self._event(
@@ -132,6 +155,50 @@ class AgentService:
         if isinstance(content, list):
             return "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
         return str(content) if content is not None else ""
+
+    @staticmethod
+    def _token_usage(message: Any) -> dict[str, int] | None:
+        usage = getattr(message, "usage_metadata", None)
+
+        if not isinstance(usage, dict) or not usage:
+            response_metadata = getattr(message, "response_metadata", None)
+
+            if isinstance(response_metadata, dict):
+                usage = response_metadata.get("token_usage") or response_metadata.get("usage")
+
+        if not isinstance(usage, dict) or not usage:
+            return None
+
+        input_tokens = int(
+            usage.get(
+                "input_tokens",
+                usage.get("prompt_tokens", 0),
+            )
+            or 0
+        )
+        output_tokens = int(
+            usage.get(
+                "output_tokens",
+                usage.get("completion_tokens", 0),
+            )
+            or 0
+        )
+        total_tokens = int(
+            usage.get(
+                "total_tokens",
+                input_tokens + output_tokens,
+            )
+            or input_tokens + output_tokens
+        )
+
+        if input_tokens <= 0 and output_tokens <= 0 and total_tokens <= 0:
+            return None
+
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
 
     @staticmethod
     def _event(event: str, request_id: str, **data: Any) -> ChatEvent:
