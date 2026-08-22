@@ -71,3 +71,21 @@ def test_bm25_tokenizer_contains_chinese_bigrams_and_latin_words() -> None:
     assert "滤网" in tokens
     assert "堵塞" in tokens
     assert "wifi2" in tokens
+
+
+def test_bm25_tokenizer_preserves_model_codes_and_capacity() -> None:
+    tokens = tokenize_for_bm25("H13 滤网和 5200mAh 电池")
+
+    assert "h13" in tokens
+    assert "5200mah" in tokens
+    assert "滤网" in tokens
+    assert "电池" in tokens
+
+
+def test_bm25_tokenizer_keeps_typo_without_fake_correction() -> None:
+    tokens = tokenize_for_bm25("主涮被猫毛缠住")
+
+    assert "主涮" in tokens
+    assert "主刷" not in tokens
+    assert "猫毛" in tokens
+    assert "缠住" in tokens
