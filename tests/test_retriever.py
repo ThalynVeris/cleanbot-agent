@@ -40,6 +40,20 @@ class FakeKnowledgeBase:
         return [hit("b", self.chunks[1].content, dense=0.8), hit("a", self.chunks[0].content, dense=0.7)][:k]
 
 
+class AgreeingKnowledgeBase(FakeKnowledgeBase):
+    def dense_search(self, query: str, k: int) -> list[KnowledgeHit]:
+        return [hit("a", self.chunks[0].content, dense=0.9), hit("b", self.chunks[1].content, dense=0.8)][:k]
+
+
+class RerankPolicySettings:
+    def __init__(self, settings: Settings, rerank_policy: str):
+        self.settings = settings
+        self.rerank_policy = rerank_policy
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.settings, name)
+
+
 def test_rrf_combines_dense_and_sparse_rankings() -> None:
     dense = [hit("a", "A", dense=0.9), hit("b", "B", dense=0.7)]
     sparse = [hit("b", "B", sparse=1.0), hit("c", "C", sparse=0.5)]
@@ -124,3 +138,84 @@ async def test_rerank_provider_failure_falls_back_to_rrf(
     assert all(hit.rerank_score is None for hit in results)
     assert results[0].fusion_score > results[1].fusion_score
     assert "rerank_failed_falling_back_to_rrf" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_disagreement_policy_skips_rerank_when_retrievers_agree(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enabled_settings = replace(
+        settings,
+        enable_rerank=True,
+        dashscope_api_key="test-api-key",
+    )
+    policy_settings = RerankPolicySettings(
+        enabled_settings,
+        rerank_policy="disagreement",
+    )
+    retriever = HybridRetriever(
+        AgreeingKnowledgeBase(),  # type: ignore[arg-type]
+        policy_settings,  # type: ignore[arg-type]
+    )
+    rerank_calls = 0
+
+    async def count_rerank(
+        query: str,
+        candidates: list[KnowledgeHit],
+    ) -> list[KnowledgeHit]:
+        nonlocal rerank_calls
+        rerank_calls += 1
+        return candidates
+
+    monkeypatch.setattr(
+        retriever,
+        "_rerank",
+        count_rerank,
+    )
+
+    results = await retriever.retrieve("主刷毛发")
+
+    assert results
+    assert results[0].chunk_id == "a"
+    assert rerank_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_disagreement_policy_calls_rerank_when_retrievers_disagree(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enabled_settings = replace(
+        settings,
+        enable_rerank=True,
+        dashscope_api_key="test-api-key",
+    )
+    policy_settings = RerankPolicySettings(
+        enabled_settings,
+        rerank_policy="disagreement",
+    )
+    retriever = HybridRetriever(
+        FakeKnowledgeBase(),  # type: ignore[arg-type]
+        policy_settings,  # type: ignore[arg-type]
+    )
+    rerank_calls = 0
+
+    async def count_rerank(
+        query: str,
+        candidates: list[KnowledgeHit],
+    ) -> list[KnowledgeHit]:
+        nonlocal rerank_calls
+        rerank_calls += 1
+        return candidates
+
+    monkeypatch.setattr(
+        retriever,
+        "_rerank",
+        count_rerank,
+    )
+
+    results = await retriever.retrieve("主刷毛发")
+
+    assert results
+    assert rerank_calls == 1
