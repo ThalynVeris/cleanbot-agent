@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import dashscope
 import pytest
 
 from cleanbot.core.config import Settings
@@ -88,3 +91,36 @@ async def test_hybrid_retrieval_works_without_rerank(settings: Settings) -> None
     assert results
     assert results[0].chunk_id == "a"
     assert results[0].sparse_score > 0
+
+
+@pytest.mark.asyncio
+async def test_rerank_provider_failure_falls_back_to_rrf(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rerank_settings = replace(
+        settings,
+        enable_rerank=True,
+        dashscope_api_key="test-api-key",
+    )
+    retriever = HybridRetriever(
+        knowledge_base=FakeKnowledgeBase(),
+        settings=rerank_settings,
+    )
+
+    def raise_provider_error(**kwargs: object) -> None:
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        dashscope.TextReRank,
+        "call",
+        raise_provider_error,
+    )
+
+    results = await retriever.retrieve("主刷毛发")
+
+    assert [hit.chunk_id for hit in results] == ["a", "b"]
+    assert all(hit.rerank_score is None for hit in results)
+    assert results[0].fusion_score > results[1].fusion_score
+    assert "rerank_failed_falling_back_to_rrf" in caplog.text
