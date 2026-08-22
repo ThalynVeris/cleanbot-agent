@@ -104,8 +104,18 @@ class EvaluationRunner:
             "items": len(items),
             "knowledge_items": len(baseline_rows),
             "models": {
+                "chat": self.settings.chat_model_name,
                 "embedding": self.settings.embedding_model_name,
-                "rerank": self.settings.rerank_model_name if self.settings.enable_rerank else None,
+                "rerank": (self.settings.rerank_model_name if self.settings.enable_rerank else None),
+            },
+            "retrieval_config": {
+                "collection_name": self.settings.collection_name,
+                "enable_rerank": self.settings.enable_rerank,
+                "dense_top_k": self.settings.dense_top_k,
+                "sparse_top_k": self.settings.sparse_top_k,
+                "rerank_top_n": self.settings.rerank_top_n,
+                "answer_top_n": self.settings.answer_top_n,
+                "min_retrieval_score": self.settings.min_retrieval_score,
             },
             "baseline": self._summarize_retrieval(baseline_rows),
             "optimized": self._summarize_retrieval(optimized_rows),
@@ -344,6 +354,7 @@ Answer:
         optimized = result["optimized"]
         routing = result["routing"]
         costs = result["cost_counters"]
+        retrieval_config = result["retrieval_config"]
         answers = result.get("answers", {})
         answer_section = ""
         if answers.get("samples"):
@@ -372,9 +383,13 @@ Judge 与生成器使用同一供应商，可能存在同源偏差；该结果�
 | 平均检索延迟 | {baseline["mean_latency_ms"]:.2f} ms | {optimized["mean_latency_ms"]:.2f} ms |
 | P95 检索延迟 | {baseline["p95_latency_ms"]:.2f} ms | {optimized["p95_latency_ms"]:.2f} ms |
 
+- 数据集：`{result["dataset"]}`。
 - 数据集条目：{result["items"]}，其中知识检索题：{result["knowledge_items"]}。
 - 路由准确率：{routing["accuracy"]:.2%}。
-- Embedding：`{result["models"]["embedding"]}`；Rerank：`{result["models"]["rerank"]}`。
+- Chat：`{result["models"]["chat"]}`；Embedding：`{result["models"]["embedding"]}`；Rerank：`{result["models"]["rerank"]}`。
+- 向量集合：`{retrieval_config["collection_name"]}`；Rerank 开启：`{retrieval_config["enable_rerank"]}`。
+- Dense Top-K：`{retrieval_config["dense_top_k"]}`；Sparse Top-K：`{retrieval_config["sparse_top_k"]}`；Rerank Top-N：`{retrieval_config["rerank_top_n"]}`。
+- Answer Top-N：`{retrieval_config["answer_top_n"]}`；最低检索分数：`{retrieval_config["min_retrieval_score"]}`。
 - Embedding 调用：{costs["embedding_calls"]}；Rerank 调用：{costs["rerank_calls"]}。
 - 路由模型调用：{costs["routing_model_calls"]}。
 - 答案模型调用：{costs["answer_model_calls"]}；Judge 调用：{costs["judge_model_calls"]}。

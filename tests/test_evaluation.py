@@ -137,3 +137,51 @@ async def test_full_runner_includes_answer_metrics_and_cost_counters(
     markdown_output = tmp_path / "result.md"
     runner.save(result, json_output, markdown_output)
     assert "答案级抽样评测" in markdown_output.read_text(encoding="utf-8")
+
+
+async def test_report_records_reproducible_configuration(
+    settings: Settings,
+    tmp_path: Path,
+) -> None:
+    dataset = tmp_path / "reproducible.jsonl"
+    record = {
+        "id": "q1",
+        "category": "test",
+        "query": "主刷毛发怎么清理",
+        "expected_intent": "knowledge",
+        "expected_contains": ["毛发缠绕"],
+    }
+    dataset.write_text(
+        json.dumps(record, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    runner = EvaluationRunner(
+        FakeRetriever(),  # type: ignore[arg-type]
+        FakeRouter(),  # type: ignore[arg-type]
+        None,
+        settings,
+    )
+    result = await runner.run(dataset)
+
+    assert result["dataset"] == str(dataset)
+    assert result["models"]["chat"] == settings.chat_model_name
+    assert result["models"]["embedding"] == settings.embedding_model_name
+    assert result["retrieval_config"] == {
+        "collection_name": settings.collection_name,
+        "enable_rerank": settings.enable_rerank,
+        "dense_top_k": settings.dense_top_k,
+        "sparse_top_k": settings.sparse_top_k,
+        "rerank_top_n": settings.rerank_top_n,
+        "answer_top_n": settings.answer_top_n,
+        "min_retrieval_score": settings.min_retrieval_score,
+    }
+
+    json_output = tmp_path / "result.json"
+    markdown_output = tmp_path / "result.md"
+    runner.save(result, json_output, markdown_output)
+
+    report = markdown_output.read_text(encoding="utf-8")
+    assert f"数据集：`{dataset}`" in report
+    assert f"Dense Top-K：`{settings.dense_top_k}`" in report
+    assert f"最低检索分数：`{settings.min_retrieval_score}`" in report
