@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from cleanbot.core.config import Settings
 from cleanbot.core.schemas import KnowledgeHit
 from cleanbot.rag.retriever import HybridRetriever
@@ -43,6 +45,41 @@ def test_rrf_combines_dense_and_sparse_rankings() -> None:
     assert fused[0].dense_score == 0.7
     assert fused[0].sparse_score == 1.0
     assert fused[0].score == 1.0
+
+
+def test_rrf_uses_rank_positions_and_rewards_shared_results() -> None:
+    dense = [
+        hit("a", "A", dense=0.99),
+        hit("b", "B", dense=0.10),
+        hit("c", "C", dense=0.01),
+    ]
+    sparse = [
+        hit("b", "B", sparse=0.80),
+        hit("d", "D", sparse=0.70),
+        hit("a", "A", sparse=0.60),
+    ]
+
+    fused = HybridRetriever.fuse_rrf(
+        dense,
+        sparse,
+    )
+
+    assert [item.chunk_id for item in fused] == [
+        "b",
+        "a",
+        "d",
+        "c",
+    ]
+
+    by_id = {item.chunk_id: item for item in fused}
+
+    expected_b = 1 / 62 + 1 / 61
+    expected_a = 1 / 61 + 1 / 63
+
+    assert by_id["b"].fusion_score == pytest.approx(expected_b)
+    assert by_id["a"].fusion_score == pytest.approx(expected_a)
+    assert by_id["b"].score == 1.0
+    assert by_id["a"].score == pytest.approx(expected_a / expected_b)
 
 
 async def test_hybrid_retrieval_works_without_rerank(settings: Settings) -> None:
