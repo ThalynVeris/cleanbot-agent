@@ -79,6 +79,19 @@ class FakeRetriever:
         )
 
 
+class CountingFakeRetriever(FakeRetriever):
+    def __init__(self) -> None:
+        self.rerank_calls = 0
+
+    async def retrieve(
+        self,
+        query: str,
+    ) -> list[KnowledgeHit]:
+        results = await super().retrieve(query)
+        self.rerank_calls += 1
+        return results
+
+
 class FakeRouter:
     def deterministic(self, query: str):
         return Intent.KNOWLEDGE if "主刷" in query else Intent.OUT_OF_SCOPE
@@ -121,7 +134,7 @@ async def test_full_runner_includes_answer_metrics_and_cost_counters(
     ]
     dataset.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in records), encoding="utf-8")
     runner = EvaluationRunner(
-        FakeRetriever(),  # type: ignore[arg-type]
+        CountingFakeRetriever(),  # type: ignore[arg-type]
         FakeRouter(),  # type: ignore[arg-type]
         FakeModel(),  # type: ignore[arg-type]
         settings,
@@ -132,6 +145,7 @@ async def test_full_runner_includes_answer_metrics_and_cost_counters(
     assert result["answers"]["faithfulness"] == 1.0
     assert result["answers"]["citation_correctness"] == 1.0
     assert result["cost_counters"]["reported_generation_tokens"] == 15
+    assert result["cost_counters"]["rerank_calls"] == 2
 
     json_output = tmp_path / "result.json"
     markdown_output = tmp_path / "result.md"
@@ -170,6 +184,7 @@ async def test_report_records_reproducible_configuration(
     assert result["retrieval_config"] == {
         "collection_name": settings.collection_name,
         "enable_rerank": settings.enable_rerank,
+        "rerank_policy": settings.rerank_policy,
         "dense_top_k": settings.dense_top_k,
         "sparse_top_k": settings.sparse_top_k,
         "rerank_top_n": settings.rerank_top_n,

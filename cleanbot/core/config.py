@@ -4,7 +4,9 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+RerankPolicy = Literal["always", "disagreement"]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -12,6 +14,18 @@ def _as_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _as_rerank_policy(value: str | None) -> RerankPolicy:
+    policy = (value or "always").strip().lower()
+
+    if policy == "always":
+        return "always"
+
+    if policy == "disagreement":
+        return "disagreement"
+
+    raise ValueError("RERANK_POLICY must be 'always' or 'disagreement'")
 
 
 def _as_path(value: str | None, default: Path) -> Path:
@@ -36,6 +50,7 @@ class Settings:
     dashscope_api_key: str | None
     dashscope_base_url: str
     enable_rerank: bool
+    rerank_policy: RerankPolicy
     admin_token: str
     app_env: str
     log_level: str
@@ -79,6 +94,7 @@ def get_settings() -> Settings:
             "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
         ),
         enable_rerank=_as_bool(os.getenv("ENABLE_RERANK"), True),
+        rerank_policy=_as_rerank_policy(os.getenv("RERANK_POLICY")),
         admin_token=os.getenv("ADMIN_TOKEN", "change-me-before-deployment"),
         app_env=os.getenv("APP_ENV", "development"),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),

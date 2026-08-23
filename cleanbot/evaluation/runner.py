@@ -66,7 +66,7 @@ class EvaluationRunner:
         baseline_rows: list[dict[str, Any]] = []
         optimized_rows: list[dict[str, Any]] = []
         routing_rows: list[dict[str, Any]] = []
-
+        rerank_calls_before = int(getattr(self.retriever, "rerank_calls", 0))
         for item in items:
             route_started = time.perf_counter()
             predicted = await self.router.classify(item.query)
@@ -98,6 +98,11 @@ class EvaluationRunner:
         answer_evaluation = await self._evaluate_answers(
             self._stratified_sample(knowledge_items, answer_sample_size)
         )
+        rerank_calls_after = int(getattr(self.retriever, "rerank_calls", 0))
+        actual_rerank_calls = max(
+            0,
+            rerank_calls_after - rerank_calls_before,
+        )
         routing_model_calls = sum(self.router.deterministic(item.query) is None for item in items)
         return {
             "dataset": str(dataset_path),
@@ -111,6 +116,7 @@ class EvaluationRunner:
             "retrieval_config": {
                 "collection_name": self.settings.collection_name,
                 "enable_rerank": self.settings.enable_rerank,
+                "rerank_policy": self.settings.rerank_policy,
                 "dense_top_k": self.settings.dense_top_k,
                 "sparse_top_k": self.settings.sparse_top_k,
                 "rerank_top_n": self.settings.rerank_top_n,
@@ -127,7 +133,7 @@ class EvaluationRunner:
             "answers": answer_evaluation,
             "cost_counters": {
                 "embedding_calls": len(baseline_rows) * 2,
-                "rerank_calls": len(optimized_rows) if self.settings.enable_rerank else 0,
+                "rerank_calls": actual_rerank_calls,
                 "routing_model_calls": routing_model_calls,
                 "answer_model_calls": answer_evaluation.get("successful_samples", 0),
                 "judge_model_calls": answer_evaluation.get("successful_samples", 0),
@@ -387,7 +393,7 @@ Judge 与生成器使用同一供应商，可能存在同源偏差；该结果�
 - 数据集条目：{result["items"]}，其中知识检索题：{result["knowledge_items"]}。
 - 路由准确率：{routing["accuracy"]:.2%}。
 - Chat：`{result["models"]["chat"]}`；Embedding：`{result["models"]["embedding"]}`；Rerank：`{result["models"]["rerank"]}`。
-- 向量集合：`{retrieval_config["collection_name"]}`；Rerank 开启：`{retrieval_config["enable_rerank"]}`。
+- 向量集合：`{retrieval_config["collection_name"]}`；Rerank 开启：`{retrieval_config["enable_rerank"]}`；Rerank 策略：`{retrieval_config["rerank_policy"]}`。
 - Dense Top-K：`{retrieval_config["dense_top_k"]}`；Sparse Top-K：`{retrieval_config["sparse_top_k"]}`；Rerank Top-N：`{retrieval_config["rerank_top_n"]}`。
 - Answer Top-N：`{retrieval_config["answer_top_n"]}`；最低检索分数：`{retrieval_config["min_retrieval_score"]}`。
 - Embedding 调用：{costs["embedding_calls"]}；Rerank 调用：{costs["rerank_calls"]}。

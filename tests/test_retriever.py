@@ -45,15 +45,6 @@ class AgreeingKnowledgeBase(FakeKnowledgeBase):
         return [hit("a", self.chunks[0].content, dense=0.9), hit("b", self.chunks[1].content, dense=0.8)][:k]
 
 
-class RerankPolicySettings:
-    def __init__(self, settings: Settings, rerank_policy: str):
-        self.settings = settings
-        self.rerank_policy = rerank_policy
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self.settings, name)
-
-
 def test_rrf_combines_dense_and_sparse_rankings() -> None:
     dense = [hit("a", "A", dense=0.9), hit("b", "B", dense=0.7)]
     sparse = [hit("b", "B", sparse=1.0), hit("c", "C", sparse=0.5)]
@@ -138,6 +129,7 @@ async def test_rerank_provider_failure_falls_back_to_rrf(
     assert all(hit.rerank_score is None for hit in results)
     assert results[0].fusion_score > results[1].fusion_score
     assert "rerank_failed_falling_back_to_rrf" in caplog.text
+    assert retriever.rerank_calls == 1
 
 
 @pytest.mark.asyncio
@@ -145,13 +137,10 @@ async def test_disagreement_policy_skips_rerank_when_retrievers_agree(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    enabled_settings = replace(
+    policy_settings = replace(
         settings,
         enable_rerank=True,
         dashscope_api_key="test-api-key",
-    )
-    policy_settings = RerankPolicySettings(
-        enabled_settings,
         rerank_policy="disagreement",
     )
     retriever = HybridRetriever(
@@ -179,6 +168,7 @@ async def test_disagreement_policy_skips_rerank_when_retrievers_agree(
     assert results
     assert results[0].chunk_id == "a"
     assert rerank_calls == 0
+    assert retriever.rerank_calls == 0
 
 
 @pytest.mark.asyncio
@@ -186,13 +176,10 @@ async def test_disagreement_policy_calls_rerank_when_retrievers_disagree(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    enabled_settings = replace(
+    policy_settings = replace(
         settings,
         enable_rerank=True,
         dashscope_api_key="test-api-key",
-    )
-    policy_settings = RerankPolicySettings(
-        enabled_settings,
         rerank_policy="disagreement",
     )
     retriever = HybridRetriever(
@@ -219,3 +206,4 @@ async def test_disagreement_policy_calls_rerank_when_retrievers_disagree(
 
     assert results
     assert rerank_calls == 1
+    assert retriever.rerank_calls == 1

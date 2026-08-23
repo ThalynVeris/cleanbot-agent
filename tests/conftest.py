@@ -29,6 +29,7 @@ def settings(tmp_path: Path) -> Settings:
         dashscope_api_key=None,
         dashscope_base_url="https://example.invalid/v1",
         enable_rerank=False,
+        rerank_policy="always",
         admin_token="test-admin-token",
         app_env="test",
         log_level="WARNING",

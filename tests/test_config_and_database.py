@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from cleanbot.core.config import PROJECT_ROOT, Settings
+from cleanbot.core.config import PROJECT_ROOT, Settings, get_settings
 from cleanbot.db.database import Database, SessionOwnershipError
 from cleanbot.db.models import ChatSession, Message
 
@@ -131,19 +131,14 @@ def test_session_messages_relationship_and_delete_cascade(
             "第一条消息",
             "第二条消息",
         ]
-        assert all(
-            message.session is chat_session
-            for message in chat_session.messages
-        )
+        assert all(message.session is chat_session for message in chat_session.messages)
 
         db.delete(chat_session)
 
     with database.session() as db:
         deleted_session = db.get(ChatSession, "session-relations")
         remaining_messages = db.scalars(
-            select(Message).where(
-                Message.session_id == "session-relations"
-            )
+            select(Message).where(Message.session_id == "session-relations")
         ).all()
 
         assert deleted_session is None
@@ -166,3 +161,22 @@ def test_database_session_rolls_back_when_block_raises(settings: Settings) -> No
 
     with database.session() as db:
         assert db.get(ChatSession, "rollback-session") is None
+
+
+def test_invalid_rerank_policy_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "RERANK_POLICY",
+        "sometimes",
+    )
+    get_settings.cache_clear()
+
+    try:
+        with pytest.raises(
+            ValueError,
+            match="RERANK_POLICY",
+        ):
+            get_settings()
+    finally:
+        get_settings.cache_clear()

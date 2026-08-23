@@ -29,6 +29,27 @@ class HybridRetriever:
         self.settings = settings or get_settings()
         self._index: _SparseIndex | None = None
         self._index_lock = RLock()
+        self._rerank_calls = 0
+
+    @property
+    def rerank_calls(self) -> int:
+        return self._rerank_calls
+
+    def _should_rerank(
+        self,
+        dense: list[KnowledgeHit],
+        sparse: list[KnowledgeHit],
+    ) -> bool:
+        if not self.settings.enable_rerank or not self.settings.dashscope_api_key:
+            return False
+
+        if self.settings.rerank_policy == "always":
+            return True
+
+        if not dense or not sparse:
+            return True
+
+        return dense[0].chunk_id != sparse[0].chunk_id
 
     def invalidate(self) -> None:
         with self._index_lock:
@@ -77,13 +98,26 @@ class HybridRetriever:
             return []
 
         ranked = fused
-        if self.settings.enable_rerank and self.settings.dashscope_api_key:
+        if self._should_rerank(dense, sparse):
             try:
-                ranked = await self._rerank(query, fused[: max(self.settings.rerank_top_n * 4, 12)])
-            except Exception as exc:  # Provider failure must not take down question answering.
+                self._rerank_calls += 1
+                ranked = await self._rerank(
+                    query,
+                    fused[
+                        : max(
+                            self.settings.rerank_top_n * 4,
+                            12,
+                        )
+                    ],
+                )
+            except Exception as exc:
                 logger.warning(
                     "rerank_failed_falling_back_to_rrf",
-                    extra={"context": {"error_type": type(exc).__name__}},
+                    extra={
+                        "context": {
+                            "error_type": type(exc).__name__,
+                        }
+                    },
                 )
 
         filtered = [hit for hit in ranked if hit.score >= self.settings.min_retrieval_score]
