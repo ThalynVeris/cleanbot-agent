@@ -361,6 +361,18 @@ Answer:
         routing = result["routing"]
         costs = result["cost_counters"]
         retrieval_config = result["retrieval_config"]
+        models = result["models"]
+        chat_model = models["chat"]
+        embedding_model = models["embedding"]
+        rerank_model = models["rerank"]
+        collection_name = retrieval_config["collection_name"]
+        rerank_enabled = retrieval_config["enable_rerank"]
+        rerank_policy = retrieval_config["rerank_policy"]
+        dense_top_k = retrieval_config["dense_top_k"]
+        sparse_top_k = retrieval_config["sparse_top_k"]
+        rerank_top_n = retrieval_config["rerank_top_n"]
+        answer_top_n = retrieval_config["answer_top_n"]
+        min_retrieval_score = retrieval_config["min_retrieval_score"]
         answers = result.get("answers", {})
         answer_section = ""
         if answers.get("samples"):
@@ -392,10 +404,10 @@ Judge 与生成器使用同一供应商，可能存在同源偏差；该结果�
 - 数据集：`{result["dataset"]}`。
 - 数据集条目：{result["items"]}，其中知识检索题：{result["knowledge_items"]}。
 - 路由准确率：{routing["accuracy"]:.2%}。
-- Chat：`{result["models"]["chat"]}`；Embedding：`{result["models"]["embedding"]}`；Rerank：`{result["models"]["rerank"]}`。
-- 向量集合：`{retrieval_config["collection_name"]}`；Rerank 开启：`{retrieval_config["enable_rerank"]}`；Rerank 策略：`{retrieval_config["rerank_policy"]}`。
-- Dense Top-K：`{retrieval_config["dense_top_k"]}`；Sparse Top-K：`{retrieval_config["sparse_top_k"]}`；Rerank Top-N：`{retrieval_config["rerank_top_n"]}`。
-- Answer Top-N：`{retrieval_config["answer_top_n"]}`；最低检索分数：`{retrieval_config["min_retrieval_score"]}`。
+- Chat：`{chat_model}`；Embedding：`{embedding_model}`；Rerank：`{rerank_model}`。
+- 向量集合：`{collection_name}`；Rerank 开启：`{rerank_enabled}`；Rerank 策略：`{rerank_policy}`。
+- Dense Top-K：`{dense_top_k}`；Sparse Top-K：`{sparse_top_k}`；Rerank Top-N：`{rerank_top_n}`。
+- Answer Top-N：`{answer_top_n}`；最低检索分数：`{min_retrieval_score}`。
 - Embedding 调用：{costs["embedding_calls"]}；Rerank 调用：{costs["rerank_calls"]}。
 - 路由模型调用：{costs["routing_model_calls"]}。
 - 答案模型调用：{costs["answer_model_calls"]}；Judge 调用：{costs["judge_model_calls"]}。
