@@ -22,6 +22,8 @@ class AgentService:
         self.model = model
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[ChatEvent]:
+        user_message_saved = False
+        assistant_message_saved = False
         request_id = str(uuid.uuid4())
         started = time.perf_counter()
         final_text = ""
@@ -34,6 +36,7 @@ class AgentService:
         try:
             self.database.ensure_session(request.session_id, request.user_id)
             self.database.add_message(request.session_id, "user", request.message)
+            user_message_saved = True
 
             yield self._event("status", request_id, stage="routing", message="正在识别需求并加载会话")
             state = await self.graph.prepare(
@@ -92,6 +95,7 @@ class AgentService:
                     )
                 yield self._event("token", request_id, text=final_text)
             self.database.add_message(request.session_id, "assistant", final_text, sources)
+            assistant_message_saved = True
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
             if first_token_ms is None:
                 first_token_ms = elapsed_ms
@@ -128,8 +132,25 @@ class AgentService:
             )
         except Exception as exc:
             fallback = "服务暂时无法完成本次请求，请稍后重试。错误已记录，但不会返回伪造结果。"
-            if not final_text:
-                self.database.add_message(request.session_id, "assistant", fallback)
+            if user_message_saved and not assistant_message_saved:
+                try:
+                    self.database.add_message(
+                        request.session_id,
+                        "assistant",
+                        fallback,
+                    )
+                    assistant_message_saved = True
+                except Exception as persistence_exc:
+                    logger.exception(
+                        "fallback_persistence_failed",
+                        extra={
+                            "context": {
+                                "request_id": request_id,
+                                "session_id": request.session_id,
+                                "error_type": type(persistence_exc).__name__,
+                            }
+                        },
+                    )
             logger.exception(
                 "request_failed",
                 extra={

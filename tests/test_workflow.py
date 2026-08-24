@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AIMessageChunk
+from openai import APIConnectionError
 
+from cleanbot.api.app import create_app
 from cleanbot.core.config import Settings
 from cleanbot.core.schemas import ChatRequest, KnowledgeHit, WeatherResult
 from cleanbot.db.database import Database
@@ -31,6 +35,20 @@ class FakeModel:
         )
 
 
+class FailingStreamModel(FakeModel):
+    async def astream(self, prompt):
+        self.stream_calls += 1
+
+        yield AIMessageChunk(content="请先断电，")
+
+        raise APIConnectionError(
+            request=httpx.Request(
+                "POST",
+                "https://example.invalid",
+            )
+        )
+
+
 class FakeRetriever:
     def __init__(self) -> None:
         self.queries: list[str] = []
@@ -54,11 +72,11 @@ class FakeWeather:
         return WeatherResult(ok=False, city=city, error="offline")
 
 
-def create_service(settings: Settings):
+def create_service(settings: Settings, model: FakeModel | None = None):
     database = Database(settings)
     database.create_schema()
     database.seed_demo_data()
-    model = FakeModel()
+    model = model or FakeModel()
     retriever = FakeRetriever()
     graph = CleanBotGraph(
         database=database,
@@ -68,6 +86,19 @@ def create_service(settings: Settings):
         settings=settings,
     )
     return AgentService(database, graph, model), database, retriever  # type: ignore[arg-type]
+
+
+class StreamingApiContainer:
+    def __init__(
+        self,
+        settings: Settings,
+        agent: AgentService,
+    ) -> None:
+        self.settings = settings
+        self.agent = agent
+
+    def initialize(self) -> None:
+        pass
 
 
 async def collect(service: AgentService, request: ChatRequest):
@@ -194,6 +225,7 @@ async def test_report_uses_selected_month_and_missing_record_does_not_invent(set
     assert "不会生成推测报告" in text
     assert len(database.get_messages("session-report2")) == 2
 
+
 async def test_explicit_message_month_overrides_ui_default(
     settings: Settings,
 ) -> None:
@@ -209,15 +241,12 @@ async def test_explicit_message_month_overrides_ui_default(
         ),
     )
 
-    text = "".join(
-        event.data.get("text", "")
-        for event in events
-        if event.event == "token"
-    )
+    text = "".join(event.data.get("text", "") for event in events if event.event == "token")
 
     assert "2024-01" in text
     assert "不会生成推测报告" in text
     assert events[-1].data["model_called"] is False
+
 
 async def test_ten_concurrent_sessions_do_not_mix(settings: Settings) -> None:
     service, database, _ = create_service(settings)
@@ -252,6 +281,50 @@ async def test_session_ownership_error_becomes_error_event(settings: Settings) -
     assert [event.event for event in events] == ["error"]
     assert events[0].data["error_type"] == "SessionOwnershipError"
     assert database.get_messages("shared-session") == []
+
+
+def test_model_stream_failure_returns_complete_error_event_and_persists_fallback(
+    settings: Settings,
+) -> None:
+    failing_model = FailingStreamModel()
+    service, database, _ = create_service(
+        settings,
+        model=failing_model,
+    )
+    container = StreamingApiContainer(
+        settings,
+        service,
+    )
+    app = create_app(
+        container,  # type: ignore[arg-type]
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={
+                "session_id": "stream-failure-session",
+                "user_id": "1001",
+                "message": "扫地机器人主刷不转怎么办？",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "event: token" in response.text
+    assert "请先断电" in response.text
+    assert "event: error" in response.text
+    assert '"error_type":"APIConnectionError"' in response.text
+    assert "event: done" not in response.text
+    assert response.text.endswith("\n\n")
+
+    messages = database.get_messages("stream-failure-session")
+
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+    ]
+    assert "服务暂时无法完成本次请求" in messages[-1].content
+    assert "请先断电" not in messages[-1].content
 
 
 def test_environment_city_prefers_explicit_message_city() -> None:
