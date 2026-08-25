@@ -103,6 +103,27 @@ class DeviceCapabilitiesView(BaseModel):
     simulated: bool = True
 
 
+class DeviceActionResult(BaseModel):
+    ok: bool
+    action_id: str
+    device_id: str
+    action: Literal[
+        "start_cleaning",
+        "pause_cleaning",
+        "return_to_dock",
+    ]
+    action_status: Literal["succeeded", "failed"]
+    device_status: Literal[
+        "docked",
+        "cleaning",
+        "paused",
+        "returning_to_dock",
+    ]
+    idempotent_replay: bool = False
+    error_type: str | None = None
+    message: str
+
+
 class StoredMessage(BaseModel):
     id: int
     session_id: str

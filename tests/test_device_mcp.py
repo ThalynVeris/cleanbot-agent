@@ -7,7 +7,127 @@ from mcp import Client
 
 from cleanbot.core.config import Settings
 from cleanbot.db.database import Database
+from cleanbot.db.models import (
+    DeviceAction,
+    DeviceActionName,
+    DeviceActionStatus,
+    utc_now,
+)
 from cleanbot.device_mcp.server import create_device_mcp
+
+
+def add_device_action(
+    database: Database,
+    *,
+    action_id: str,
+    action_name: DeviceActionName,
+    status: DeviceActionStatus,
+) -> None:
+    database.ensure_session("device-write-session", "1001")
+
+    with database.session() as db:
+        db.add(
+            DeviceAction(
+                id=action_id,
+                user_id="1001",
+                device_id="demo-device-1001",
+                session_id="device-write-session",
+                action=action_name,
+                idempotency_key=f"idempotency:{action_id}",
+                checkpoint_thread_id="device-write-session",
+                status=status,
+                decided_at=(utc_now() if status is DeviceActionStatus.APPROVED else None),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_mcp_write_tool_requires_approved_action(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    add_device_action(
+        database,
+        action_id="pending-start",
+        action_name=DeviceActionName.START_CLEANING,
+        status=DeviceActionStatus.PENDING,
+    )
+
+    server = create_device_mcp(database)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "start_cleaning",
+            {
+                "action_id": "pending-start",
+                "user_id": "1001",
+                "device_id": "demo-device-1001",
+            },
+        )
+
+        assert result.is_error is True
+        assert "has not been approved" in result.content[0].text
+
+    device = database.get_device_status(
+        "1001",
+        "demo-device-1001",
+    )
+    assert device.status == "docked"
+
+
+@pytest.mark.asyncio
+async def test_mcp_executes_approved_actions_idempotently(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    add_device_action(
+        database,
+        action_id="approved-start",
+        action_name=DeviceActionName.START_CLEANING,
+        status=DeviceActionStatus.APPROVED,
+    )
+
+    server = create_device_mcp(database)
+
+    async with Client(server) as client:
+        first = await client.call_tool(
+            "start_cleaning",
+            {
+                "action_id": "approved-start",
+                "user_id": "1001",
+                "device_id": "demo-device-1001",
+            },
+        )
+        second = await client.call_tool(
+            "start_cleaning",
+            {
+                "action_id": "approved-start",
+                "user_id": "1001",
+                "device_id": "demo-device-1001",
+            },
+        )
+
+        assert first.is_error is False
+        assert first.structured_content is not None
+        assert first.structured_content["device_status"] == "cleaning"
+        assert first.structured_content["idempotent_replay"] is False
+
+        assert second.is_error is False
+        assert second.structured_content is not None
+        assert second.structured_content["device_status"] == "cleaning"
+        assert second.structured_content["idempotent_replay"] is True
+
+    device = database.get_device_status(
+        "1001",
+        "demo-device-1001",
+    )
+    assert device.status == "cleaning"
 
 
 @pytest.mark.asyncio
@@ -27,6 +147,9 @@ async def test_mcp_discovers_and_calls_read_tools(
         assert tool_names == {
             "get_device_status",
             "get_consumable_status",
+            "start_cleaning",
+            "pause_cleaning",
+            "return_to_dock",
         }
 
         status = await client.call_tool(

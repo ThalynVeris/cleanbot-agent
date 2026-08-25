@@ -14,6 +14,7 @@ from cleanbot.core.schemas import (
     ChatSessionSummary,
     ConsumableStatusView,
     DemoUser,
+    DeviceActionResult,
     DeviceCapabilitiesView,
     DeviceReport,
     DeviceStatusView,
@@ -24,6 +25,9 @@ from cleanbot.db.models import (
     Base,
     ChatSession,
     Device,
+    DeviceAction,
+    DeviceActionName,
+    DeviceActionStatus,
     DeviceMonthlyRecord,
     DeviceStatus,
     KnowledgeDocument,
@@ -45,6 +49,31 @@ DEMO_CITIES = {
     "1010": "西安",
 }
 
+DEVICE_TRANSITIONS = {
+    DeviceActionName.START_CLEANING: (
+        frozenset(
+            {
+                DeviceStatus.DOCKED,
+                DeviceStatus.PAUSED,
+            }
+        ),
+        DeviceStatus.CLEANING,
+    ),
+    DeviceActionName.PAUSE_CLEANING: (
+        frozenset({DeviceStatus.CLEANING}),
+        DeviceStatus.PAUSED,
+    ),
+    DeviceActionName.RETURN_TO_DOCK: (
+        frozenset(
+            {
+                DeviceStatus.CLEANING,
+                DeviceStatus.PAUSED,
+            }
+        ),
+        DeviceStatus.RETURNING_TO_DOCK,
+    ),
+}
+
 
 class SessionOwnershipError(ValueError):
     """Raised when a session is attempted to be reassigned to a different user."""
@@ -52,6 +81,10 @@ class SessionOwnershipError(ValueError):
 
 class DeviceOwnershipError(ValueError):
     """Raised when a user attempts to access another user's device."""
+
+
+class DeviceActionApprovalError(ValueError):
+    """Raised when a write action has no valid approval."""
 
 
 class Database:
@@ -232,6 +265,96 @@ class Database:
                 ],
                 simulated=True,
             )
+
+    def execute_device_action(
+        self,
+        action_id: str,
+        user_id: str,
+        device_id: str,
+        expected_action: DeviceActionName,
+    ) -> DeviceActionResult:
+        approval_error: DeviceActionApprovalError | None = None
+        result: DeviceActionResult | None = None
+
+        with self.session() as db:
+            action = db.scalar(select(DeviceAction).where(DeviceAction.id == action_id).with_for_update())
+
+            if (
+                action is None
+                or action.user_id != user_id
+                or action.device_id != device_id
+                or action.action is not expected_action
+            ):
+                raise DeviceActionApprovalError("Device action is not available for this request")
+
+            if action.status is DeviceActionStatus.SUCCEEDED:
+                stored = DeviceActionResult.model_validate_json(action.result_json)
+                return stored.model_copy(update={"idempotent_replay": True})
+
+            if action.status is not DeviceActionStatus.APPROVED:
+                raise DeviceActionApprovalError("Device action has not been approved")
+
+            now = utc_now()
+            comparable_now = now
+
+            if action.approval_expires_at.tzinfo is None:
+                comparable_now = now.replace(tzinfo=None)
+
+            if action.approval_expires_at <= comparable_now:
+                action.status = DeviceActionStatus.EXPIRED
+                action.error_type = "ApprovalExpiredError"
+                approval_error = DeviceActionApprovalError("Device action approval has expired")
+            else:
+                device = self._owned_device(
+                    db,
+                    user_id,
+                    device_id,
+                )
+                allowed_statuses, target_status = DEVICE_TRANSITIONS[expected_action]
+
+                if device.status not in allowed_statuses:
+                    action.status = DeviceActionStatus.FAILED
+                    action.error_type = "InvalidDeviceTransitionError"
+                    action.executed_at = now
+
+                    result = DeviceActionResult(
+                        ok=False,
+                        action_id=action.id,
+                        device_id=device.id,
+                        action=action.action.value,
+                        action_status="failed",
+                        device_status=device.status.value,
+                        error_type=action.error_type,
+                        message=(
+                            f"Cannot execute {action.action.value} while device is {device.status.value}"
+                        ),
+                    )
+                else:
+                    device.status = target_status
+                    device.updated_at = now
+                    action.status = DeviceActionStatus.SUCCEEDED
+                    action.executed_at = now
+                    action.error_type = None
+
+                    result = DeviceActionResult(
+                        ok=True,
+                        action_id=action.id,
+                        device_id=device.id,
+                        action=action.action.value,
+                        action_status="succeeded",
+                        device_status=device.status.value,
+                        message="Simulated device action completed",
+                    )
+
+                action.result_json = result.model_dump_json()
+
+        if approval_error is not None:
+            raise approval_error
+
+        if result is None:
+            raise RuntimeError("Device action produced no result")
+
+        return result
 
     def list_months(self, user_id: str) -> list[str]:
         with self.session() as db:
