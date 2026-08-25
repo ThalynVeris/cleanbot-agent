@@ -8,7 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from cleanbot.core.config import PROJECT_ROOT, Settings, get_settings
-from cleanbot.db.database import Database, SessionOwnershipError
+from cleanbot.db.database import (
+    Database,
+    PendingDeviceActionError,
+    SessionOwnershipError,
+)
 from cleanbot.db.models import (
     ChatSession,
     Device,
@@ -252,3 +256,75 @@ def test_invalid_rerank_policy_is_rejected(
             get_settings()
     finally:
         get_settings.cache_clear()
+
+
+def test_pending_device_action_is_idempotent_and_session_scoped(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    first = database.create_pending_device_action(
+        session_id="pending-session",
+        user_id="1001",
+        action_name=DeviceActionName.START_CLEANING,
+        idempotency_key="request-001:start_cleaning",
+        checkpoint_thread_id="device:pending-session",
+    )
+    repeated = database.create_pending_device_action(
+        session_id="pending-session",
+        user_id="1001",
+        action_name=DeviceActionName.START_CLEANING,
+        idempotency_key="request-001:start_cleaning",
+        checkpoint_thread_id="device:pending-session",
+    )
+
+    assert first.id == repeated.id
+    assert first.status == "pending"
+
+    with pytest.raises(
+        PendingDeviceActionError,
+        match="already has a pending",
+    ):
+        database.create_pending_device_action(
+            session_id="pending-session",
+            user_id="1001",
+            action_name=DeviceActionName.RETURN_TO_DOCK,
+            idempotency_key="request-002:return_to_dock",
+            checkpoint_thread_id="device:pending-session",
+        )
+
+
+def test_device_action_decision_is_idempotent(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    pending = database.create_pending_device_action(
+        session_id="decision-session",
+        user_id="1001",
+        action_name=DeviceActionName.START_CLEANING,
+        idempotency_key="request-decision:start_cleaning",
+        checkpoint_thread_id="device:decision-session",
+    )
+
+    approved = database.decide_device_action(
+        action_id=pending.id,
+        user_id="1001",
+        session_id="decision-session",
+        approve=True,
+    )
+    repeated = database.decide_device_action(
+        action_id=pending.id,
+        user_id="1001",
+        session_id="decision-session",
+        approve=True,
+    )
+
+    assert approved.status == "approved"
+    assert repeated.status == "approved"
+    assert repeated.id == approved.id
+    assert repeated.decided_at == approved.decided_at

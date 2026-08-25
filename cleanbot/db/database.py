@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine, delete, select
@@ -15,6 +17,7 @@ from cleanbot.core.schemas import (
     ConsumableStatusView,
     DemoUser,
     DeviceActionResult,
+    DeviceActionView,
     DeviceCapabilitiesView,
     DeviceReport,
     DeviceStatusView,
@@ -85,6 +88,27 @@ class DeviceOwnershipError(ValueError):
 
 class DeviceActionApprovalError(ValueError):
     """Raised when a write action has no valid approval."""
+
+
+class PendingDeviceActionError(ValueError):
+    """Raised when a session already has a pending device action."""
+
+
+def deadline_passed(deadline: datetime) -> bool:
+    now = utc_now()
+
+    if deadline.tzinfo is None:
+        now = now.replace(tzinfo=None)
+
+    return deadline <= now
+
+
+def as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class Database:
@@ -266,6 +290,129 @@ class Database:
                 simulated=True,
             )
 
+    def create_pending_device_action(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        action_name: DeviceActionName,
+        idempotency_key: str,
+        checkpoint_thread_id: str,
+    ) -> DeviceActionView:
+        self.ensure_session(session_id, user_id)
+
+        with self.session() as db:
+            chat_session = db.scalar(
+                select(ChatSession)
+                .where(
+                    ChatSession.id == session_id,
+                    ChatSession.user_id == user_id,
+                )
+                .with_for_update()
+            )
+
+            if chat_session is None:
+                raise SessionOwnershipError("Session is not available for this user")
+
+            existing = db.scalar(select(DeviceAction).where(DeviceAction.idempotency_key == idempotency_key))
+
+            if existing is not None:
+                if (
+                    existing.user_id != user_id
+                    or existing.session_id != session_id
+                    or existing.action is not action_name
+                ):
+                    raise DeviceActionApprovalError("Idempotency key belongs to another request")
+
+                return self._device_action_schema(existing)
+
+            pending = db.scalar(
+                select(DeviceAction).where(
+                    DeviceAction.session_id == session_id,
+                    DeviceAction.status == DeviceActionStatus.PENDING,
+                )
+            )
+
+            if pending is not None and deadline_passed(pending.approval_expires_at):
+                pending.status = DeviceActionStatus.EXPIRED
+                pending.error_type = "ApprovalExpiredError"
+                pending = None
+
+            if pending is not None:
+                raise PendingDeviceActionError("Session already has a pending device action")
+
+            device = db.scalar(select(Device).where(Device.user_id == user_id))
+
+            if device is None:
+                raise DeviceOwnershipError("Device is not available for this user")
+
+            action = DeviceAction(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                device_id=device.id,
+                session_id=session_id,
+                action=action_name,
+                idempotency_key=idempotency_key,
+                checkpoint_thread_id=checkpoint_thread_id,
+                status=DeviceActionStatus.PENDING,
+            )
+            db.add(action)
+            db.flush()
+            db.refresh(action)
+
+            return self._device_action_schema(action)
+
+    def decide_device_action(
+        self,
+        *,
+        action_id: str,
+        user_id: str,
+        session_id: str,
+        approve: bool,
+    ) -> DeviceActionView:
+        with self.session() as db:
+            action = db.scalar(select(DeviceAction).where(DeviceAction.id == action_id).with_for_update())
+
+            if action is None or action.user_id != user_id or action.session_id != session_id:
+                raise DeviceActionApprovalError("Device action is not available for this request")
+
+            if action.status is DeviceActionStatus.PENDING:
+                if deadline_passed(action.approval_expires_at):
+                    action.status = DeviceActionStatus.EXPIRED
+                    action.error_type = "ApprovalExpiredError"
+                else:
+                    action.status = DeviceActionStatus.APPROVED if approve else DeviceActionStatus.REJECTED
+                    action.decided_at = utc_now()
+
+            return self._device_action_schema(action)
+
+    def get_pending_device_action(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+    ) -> DeviceActionView | None:
+        with self.session() as db:
+            action = db.scalar(
+                select(DeviceAction)
+                .where(
+                    DeviceAction.session_id == session_id,
+                    DeviceAction.user_id == user_id,
+                    DeviceAction.status == DeviceActionStatus.PENDING,
+                )
+                .order_by(DeviceAction.created_at.desc())
+            )
+
+            if action is None:
+                return None
+
+            if deadline_passed(action.approval_expires_at):
+                action.status = DeviceActionStatus.EXPIRED
+                action.error_type = "ApprovalExpiredError"
+                return None
+
+            return self._device_action_schema(action)
+
     def execute_device_action(
         self,
         action_id: str,
@@ -295,12 +442,8 @@ class Database:
                 raise DeviceActionApprovalError("Device action has not been approved")
 
             now = utc_now()
-            comparable_now = now
 
-            if action.approval_expires_at.tzinfo is None:
-                comparable_now = now.replace(tzinfo=None)
-
-            if action.approval_expires_at <= comparable_now:
+            if deadline_passed(action.approval_expires_at):
                 action.status = DeviceActionStatus.EXPIRED
                 action.error_type = "ApprovalExpiredError"
                 approval_error = DeviceActionApprovalError("Device action approval has expired")
@@ -482,6 +625,25 @@ class Database:
             content=message.content,
             sources=sources,
             created_at=message.created_at,
+        )
+
+    @staticmethod
+    def _device_action_schema(
+        action: DeviceAction,
+    ) -> DeviceActionView:
+        return DeviceActionView(
+            id=action.id,
+            user_id=action.user_id,
+            device_id=action.device_id,
+            session_id=action.session_id,
+            action=action.action.value,
+            status=action.status.value,
+            checkpoint_thread_id=action.checkpoint_thread_id,
+            approval_expires_at=as_utc(action.approval_expires_at),
+            decided_at=as_utc(action.decided_at),
+            executed_at=as_utc(action.executed_at),
+            error_type=action.error_type,
+            created_at=as_utc(action.created_at),
         )
 
     def get_knowledge_document(self, document_id: str) -> KnowledgeDocument | None:

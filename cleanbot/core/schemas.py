@@ -124,6 +124,32 @@ class DeviceActionResult(BaseModel):
     message: str
 
 
+class DeviceActionView(BaseModel):
+    id: str
+    user_id: str
+    device_id: str
+    session_id: str
+    action: Literal[
+        "start_cleaning",
+        "pause_cleaning",
+        "return_to_dock",
+    ]
+    status: Literal[
+        "pending",
+        "approved",
+        "rejected",
+        "succeeded",
+        "failed",
+        "expired",
+    ]
+    checkpoint_thread_id: str
+    approval_expires_at: datetime
+    decided_at: datetime | None = None
+    executed_at: datetime | None = None
+    error_type: str | None = None
+    created_at: datetime
+
+
 class StoredMessage(BaseModel):
     id: int
     session_id: str
