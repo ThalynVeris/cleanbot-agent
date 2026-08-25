@@ -12,15 +12,20 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from cleanbot.core.config import Settings, get_settings
 from cleanbot.core.schemas import (
     ChatSessionSummary,
+    ConsumableStatusView,
     DemoUser,
+    DeviceCapabilitiesView,
     DeviceReport,
+    DeviceStatusView,
     SourceRef,
     StoredMessage,
 )
 from cleanbot.db.models import (
     Base,
     ChatSession,
+    Device,
     DeviceMonthlyRecord,
+    DeviceStatus,
     KnowledgeDocument,
     Message,
     User,
@@ -43,6 +48,10 @@ DEMO_CITIES = {
 
 class SessionOwnershipError(ValueError):
     """Raised when a session is attempted to be reassigned to a different user."""
+
+
+class DeviceOwnershipError(ValueError):
+    """Raised when a user attempts to access another user's device."""
 
 
 class Database:
@@ -79,6 +88,7 @@ class Database:
 
         users_created = 0
         records_upserted = 0
+        processed_device_users: set[str] = set()
         with csv_path.open("r", encoding="utf-8", newline="") as handle, self.session() as db:
             reader = csv.DictReader(handle)
             for row in reader:
@@ -94,7 +104,20 @@ class Database:
                     )
                     db.flush()
                     users_created += 1
-
+                if user_id not in processed_device_users:
+                    device = db.scalar(select(Device).where(Device.user_id == user_id))
+                    if device is None:
+                        db.add(
+                            Device(
+                                id=f"demo-device-{user_id}",
+                                user_id=user_id,
+                                model="CleanBot X1（模拟设备）",
+                                status=DeviceStatus.DOCKED,
+                                battery_percent=100,
+                                consumable_percent=100,
+                            )
+                        )
+                    processed_device_users.add(user_id)
                 record = db.scalar(
                     select(DeviceMonthlyRecord).where(
                         DeviceMonthlyRecord.user_id == user_id,
@@ -132,6 +155,83 @@ class Database:
             if user is None:
                 return None
             return DemoUser(id=user.id, display_name=user.display_name, city=user.city)
+
+    @staticmethod
+    def _owned_device(
+        db: Session,
+        user_id: str,
+        device_id: str,
+    ) -> Device:
+        device = db.scalar(
+            select(Device).where(
+                Device.id == device_id,
+                Device.user_id == user_id,
+            )
+        )
+
+        if device is None:
+            raise DeviceOwnershipError("Device is not available for this user")
+
+        return device
+
+    def get_device_status(
+        self,
+        user_id: str,
+        device_id: str,
+    ) -> DeviceStatusView:
+        with self.session() as db:
+            device = self._owned_device(db, user_id, device_id)
+
+            return DeviceStatusView(
+                device_id=device.id,
+                user_id=device.user_id,
+                model=device.model,
+                status=device.status.value,
+                battery_percent=device.battery_percent,
+                simulated=True,
+            )
+
+    def get_consumable_status(
+        self,
+        user_id: str,
+        device_id: str,
+    ) -> ConsumableStatusView:
+        with self.session() as db:
+            device = self._owned_device(db, user_id, device_id)
+
+            return ConsumableStatusView(
+                device_id=device.id,
+                user_id=device.user_id,
+                consumable_percent=device.consumable_percent,
+                replacement_recommended=(device.consumable_percent <= 10),
+                simulated=True,
+            )
+
+    def get_device_capabilities(
+        self,
+        device_id: str,
+    ) -> DeviceCapabilitiesView:
+        with self.session() as db:
+            device = db.get(Device, device_id)
+
+            if device is None:
+                raise ValueError("Unknown device")
+
+            return DeviceCapabilitiesView(
+                device_id=device.id,
+                model=device.model,
+                supported_actions=[
+                    "start_cleaning",
+                    "pause_cleaning",
+                    "return_to_dock",
+                ],
+                readable_properties=[
+                    "status",
+                    "battery_percent",
+                    "consumable_percent",
+                ],
+                simulated=True,
+            )
 
     def list_months(self, user_id: str) -> list[str]:
         with self.session() as db:

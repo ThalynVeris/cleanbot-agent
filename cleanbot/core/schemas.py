@@ -73,6 +73,36 @@ class DeviceReport(BaseModel):
     comparison: str
 
 
+class DeviceStatusView(BaseModel):
+    device_id: str
+    user_id: str
+    model: str
+    status: Literal[
+        "docked",
+        "cleaning",
+        "paused",
+        "returning_to_dock",
+    ]
+    battery_percent: int = Field(ge=0, le=100)
+    simulated: bool = True
+
+
+class ConsumableStatusView(BaseModel):
+    device_id: str
+    user_id: str
+    consumable_percent: int = Field(ge=0, le=100)
+    replacement_recommended: bool
+    simulated: bool = True
+
+
+class DeviceCapabilitiesView(BaseModel):
+    device_id: str
+    model: str
+    supported_actions: list[str]
+    readable_properties: list[str]
+    simulated: bool = True
+
+
 class StoredMessage(BaseModel):
     id: int
     session_id: str

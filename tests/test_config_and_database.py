@@ -9,7 +9,16 @@ from sqlalchemy.orm import selectinload
 
 from cleanbot.core.config import PROJECT_ROOT, Settings, get_settings
 from cleanbot.db.database import Database, SessionOwnershipError
-from cleanbot.db.models import ChatSession, Message
+from cleanbot.db.models import (
+    ChatSession,
+    Device,
+    DeviceAction,
+    DeviceActionName,
+    DeviceActionStatus,
+    DeviceStatus,
+    Message,
+    User,
+)
 
 
 def test_project_root_is_independent_of_current_working_directory() -> None:
@@ -161,6 +170,69 @@ def test_database_session_rolls_back_when_block_raises(settings: Settings) -> No
 
     with database.session() as db:
         assert db.get(ChatSession, "rollback-session") is None
+
+
+def test_demo_devices_are_seeded_once_per_user(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+
+    database.seed_demo_data()
+    database.seed_demo_data()
+
+    with database.session() as db:
+        devices = db.scalars(select(Device).order_by(Device.user_id)).all()
+        user = db.scalar(select(User).options(selectinload(User.device)).where(User.id == "1001"))
+
+        assert len(devices) == 10
+        assert user is not None
+        assert user.device is not None
+        assert user.device.id == "demo-device-1001"
+        assert user.device.model == "CleanBot X1（模拟设备）"
+        assert user.device.status is DeviceStatus.DOCKED
+        assert user.device.battery_percent == 100
+
+
+def test_device_action_keeps_auditable_relationships(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+    database.ensure_session("device-action-session", "1001")
+
+    with database.session() as db:
+        db.add(
+            DeviceAction(
+                id="action-0001",
+                user_id="1001",
+                device_id="demo-device-1001",
+                session_id="device-action-session",
+                action=DeviceActionName.START_CLEANING,
+                idempotency_key="device-action-session:start-cleaning",
+                checkpoint_thread_id="device-action-session",
+            )
+        )
+
+    with database.session() as db:
+        action = db.scalar(
+            select(DeviceAction)
+            .options(
+                selectinload(DeviceAction.user),
+                selectinload(DeviceAction.device),
+                selectinload(DeviceAction.session),
+            )
+            .where(DeviceAction.id == "action-0001")
+        )
+
+        assert action is not None
+        assert action.status is DeviceActionStatus.PENDING
+        assert action.user.id == "1001"
+        assert action.device.id == "demo-device-1001"
+        assert action.session.id == "device-action-session"
+        assert action.executed_at is None
+        assert action.approval_expires_at is not None
 
 
 def test_invalid_rerank_policy_is_rejected(
