@@ -231,6 +231,23 @@ class Database:
 
         return device
 
+    def get_user_device_status(
+        self,
+        user_id: str,
+    ) -> DeviceStatusView:
+        with self.session() as db:
+            device = db.scalar(select(Device).where(Device.user_id == user_id))
+
+            if device is None:
+                raise DeviceOwnershipError("Device is not available for this user")
+
+            device_id = device.id
+
+        return self.get_device_status(
+            user_id,
+            device_id,
+        )
+
     def get_device_status(
         self,
         user_id: str,
@@ -383,6 +400,27 @@ class Database:
                 else:
                     action.status = DeviceActionStatus.APPROVED if approve else DeviceActionStatus.REJECTED
                     action.decided_at = utc_now()
+
+            return self._device_action_schema(action)
+
+    def get_device_action(
+        self,
+        *,
+        action_id: str,
+        user_id: str,
+        session_id: str,
+    ) -> DeviceActionView | None:
+        with self.session() as db:
+            action = db.scalar(
+                select(DeviceAction).where(
+                    DeviceAction.id == action_id,
+                    DeviceAction.user_id == user_id,
+                    DeviceAction.session_id == session_id,
+                )
+            )
+
+            if action is None:
+                return None
 
             return self._device_action_schema(action)
 
