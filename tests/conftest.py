@@ -42,4 +42,7 @@ def settings(tmp_path: Path) -> Settings:
         model_timeout_seconds=5,
         weather_timeout_seconds=1,
         max_upload_bytes=1024 * 1024,
+        device_checkpoint_path=(runtime / "device-checkpoints.sqlite"),
+        device_mcp_url=None,
+        device_mcp_timeout_seconds=1,
     )

@@ -63,6 +63,9 @@ class Settings:
     model_timeout_seconds: float
     weather_timeout_seconds: float
     max_upload_bytes: int
+    device_checkpoint_path: Path
+    device_mcp_url: str | None
+    device_mcp_timeout_seconds: float
 
     def ensure_runtime_dirs(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +110,18 @@ def get_settings() -> Settings:
         model_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "45")),
         weather_timeout_seconds=float(os.getenv("WEATHER_TIMEOUT_SECONDS", "6")),
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))),
+        device_checkpoint_path=_as_path(
+            os.getenv("DEVICE_CHECKPOINT_PATH"),
+            runtime_dir / "device-checkpoints.sqlite",
+        ),
+        device_mcp_url=(os.getenv("DEVICE_MCP_URL") or None),
+        device_mcp_timeout_seconds=float(
+            os.getenv(
+                "DEVICE_MCP_TIMEOUT_SECONDS",
+                "5",
+            )
+        ),
     )
+
     settings.ensure_runtime_dirs()
     return settings

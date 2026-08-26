@@ -38,9 +38,19 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         nonlocal selected_container
         configure_logging()
         selected_container = selected_container or get_container()
-        await asyncio.to_thread(selected_container.initialize)
-        application.state.container = selected_container
-        yield
+        try:
+            await asyncio.to_thread(selected_container.initialize)
+            application.state.container = selected_container
+            yield
+        finally:
+            close = getattr(
+                selected_container,
+                "close",
+                None,
+            )
+
+            if callable(close):
+                await asyncio.to_thread(close)
 
     app = FastAPI(
         title="CleanBot Agent API",
