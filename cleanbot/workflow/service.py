@@ -64,28 +64,80 @@ class AgentService:
                 )
 
             direct_answer = state.get("direct_answer")
-            if direct_answer:
+            approval_required = bool(state.get("approval_required"))
+            device_action = state.get("device_action")
+
+            if approval_required:
+                if device_action is None:
+                    raise RuntimeError("Approval workflow did not provide a device action")
+
+                final_text = direct_answer or "设备操作需要用户确认。"
+
+                first_token_ms = round(
+                    (time.perf_counter() - started) * 1000,
+                    2,
+                )
+
+                yield self._event(
+                    "approval_required",
+                    request_id,
+                    message=final_text,
+                    action=device_action.model_dump(mode="json"),
+                )
+
+            elif direct_answer:
                 async for token in self._chunk_text(direct_answer):
                     if first_token_ms is None:
-                        first_token_ms = round((time.perf_counter() - started) * 1000, 2)
+                        first_token_ms = round(
+                            (time.perf_counter() - started) * 1000,
+                            2,
+                        )
+
                     final_text += token
-                    yield self._event("token", request_id, text=token)
+
+                    yield self._event(
+                        "token",
+                        request_id,
+                        text=token,
+                    )
+
             else:
                 prompt = state.get("answer_prompt", "")
+
                 if not prompt:
                     raise RuntimeError("Workflow did not produce an answer prompt")
-                yield self._event("status", request_id, stage="generating", message="正在生成有依据的回答")
+
+                yield self._event(
+                    "status",
+                    request_id,
+                    stage="generating",
+                    message=("正在生成有依据的回答"),
+                )
+
                 model_called = True
+
                 async for chunk in self.model.astream(prompt):
                     usage = self._token_usage(chunk)
+
                     if usage is not None:
                         token_usage = usage
+
                     token = self._message_text(chunk)
+
                     if token:
                         if first_token_ms is None:
-                            first_token_ms = round((time.perf_counter() - started) * 1000, 2)
+                            first_token_ms = round(
+                                (time.perf_counter() - started) * 1000,
+                                2,
+                            )
+
                         final_text += token
-                        yield self._event("token", request_id, text=token)
+
+                        yield self._event(
+                            "token",
+                            request_id,
+                            text=token,
+                        )
 
             if not final_text.strip():
                 final_text = "服务没有生成有效内容，请稍后重试。"
@@ -107,6 +159,8 @@ class AgentService:
                 "latency_ms": elapsed_ms,
                 "model_called": model_called,
             }
+            if approval_required:
+                completion_data["pending_approval"] = True
             if token_usage is not None:
                 completion_data["token_usage"] = token_usage
             logger.info(

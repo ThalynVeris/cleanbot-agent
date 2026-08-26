@@ -190,7 +190,14 @@ class DemoUser(BaseModel):
 
 
 class ChatEvent(BaseModel):
-    event: Literal["status", "source", "token", "done", "error"]
+    event: Literal[
+        "status",
+        "source",
+        "token",
+        "approval_required",
+        "done",
+        "error",
+    ]
     request_id: str
     data: dict[str, Any]
 

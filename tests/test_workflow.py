@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi.testclient import TestClient
@@ -9,7 +10,12 @@ from openai import APIConnectionError
 
 from cleanbot.api.app import create_app
 from cleanbot.core.config import Settings
-from cleanbot.core.schemas import ChatRequest, KnowledgeHit, WeatherResult
+from cleanbot.core.schemas import (
+    ChatRequest,
+    DeviceActionView,
+    KnowledgeHit,
+    WeatherResult,
+)
 from cleanbot.db.database import Database
 from cleanbot.workflow.device_control import (
     DeviceControlOutcome,
@@ -99,6 +105,45 @@ class FakeDeviceControl:
         return DeviceControlOutcome(
             kind="answer",
             message="模拟设备当前状态为 docked，剩余电量 85%。",
+        )
+
+
+class FakeApprovalDeviceControl(FakeDeviceControl):
+    async def prepare(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        request_id: str,
+        message: str,
+    ) -> DeviceControlOutcome:
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "request_id": request_id,
+                "message": message,
+            }
+        )
+
+        now = datetime.now(timezone.utc)
+
+        action = DeviceActionView(
+            id="pending-action-001",
+            user_id=user_id,
+            device_id="device-1001",
+            session_id=session_id,
+            action="start_cleaning",
+            status="pending",
+            checkpoint_thread_id=(f"device:{session_id}:{request_id}"),
+            approval_expires_at=(now + timedelta(minutes=30)),
+            created_at=now,
+        )
+
+        return DeviceControlOutcome(
+            kind="approval_required",
+            message=("是否允许模拟设备执行 start_cleaning？"),
+            action=action,
         )
 
 
@@ -398,3 +443,53 @@ async def test_device_request_enters_device_graph_branch(
     assert events[-1].data["intent"] == "device"
     assert events[-1].data["model_called"] is False
     assert "docked" in text
+
+
+async def test_device_write_returns_approval_event(
+    settings: Settings,
+) -> None:
+    device_control = FakeApprovalDeviceControl()
+
+    service, database, _ = create_service(
+        settings,
+        device_control=device_control,
+    )
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="device-approval-session",
+            user_id="1001",
+            message="请开始清扫",
+        ),
+    )
+
+    assert [event.event for event in events] == [
+        "status",
+        "status",
+        "approval_required",
+        "done",
+    ]
+
+    approval = events[-2]
+
+    assert approval.data["message"] == ("是否允许模拟设备执行 start_cleaning？")
+    assert approval.data["action"]["id"] == ("pending-action-001")
+    assert approval.data["action"]["action"] == ("start_cleaning")
+    assert approval.data["action"]["status"] == ("pending")
+
+    done = events[-1]
+
+    assert done.data["intent"] == "device"
+    assert done.data["model_called"] is False
+    assert done.data["pending_approval"] is True
+
+    assert not any(event.event == "token" for event in events)
+
+    messages = database.get_messages("device-approval-session")
+
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+    ]
+    assert "start_cleaning" in (messages[-1].content)
