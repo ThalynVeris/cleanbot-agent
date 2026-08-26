@@ -45,6 +45,7 @@ class AgentService:
                     "user_id": request.user_id,
                     "message": request.message,
                     "month": request.month,
+                    "request_id": request_id,
                 }
             )
             intent = state.get("intent", "unknown")

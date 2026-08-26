@@ -11,6 +11,9 @@ from cleanbot.api.app import create_app
 from cleanbot.core.config import Settings
 from cleanbot.core.schemas import ChatRequest, KnowledgeHit, WeatherResult
 from cleanbot.db.database import Database
+from cleanbot.workflow.device_control import (
+    DeviceControlOutcome,
+)
 from cleanbot.workflow.graph import CleanBotGraph
 from cleanbot.workflow.service import AgentService
 
@@ -72,7 +75,38 @@ class FakeWeather:
         return WeatherResult(ok=False, city=city, error="offline")
 
 
-def create_service(settings: Settings, model: FakeModel | None = None):
+class FakeDeviceControl:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    async def prepare(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        request_id: str,
+        message: str,
+    ) -> DeviceControlOutcome:
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "request_id": request_id,
+                "message": message,
+            }
+        )
+
+        return DeviceControlOutcome(
+            kind="answer",
+            message="模拟设备当前状态为 docked，剩余电量 85%。",
+        )
+
+
+def create_service(
+    settings: Settings,
+    model: FakeModel | None = None,
+    device_control=None,
+):
     database = Database(settings)
     database.create_schema()
     database.seed_demo_data()
@@ -84,6 +118,7 @@ def create_service(settings: Settings, model: FakeModel | None = None):
         weather=FakeWeather(),  # type: ignore[arg-type]
         model=model,  # type: ignore[arg-type]
         settings=settings,
+        device_control=device_control,
     )
     return AgentService(database, graph, model), database, retriever  # type: ignore[arg-type]
 
@@ -332,3 +367,34 @@ def test_environment_city_prefers_explicit_message_city() -> None:
     assert CleanBotGraph._city_from_message("请问北京现在天气如何", "上海") == "北京"
     assert CleanBotGraph._city_from_message("今天的天气怎么样", "上海") == "上海"
     assert CleanBotGraph._city_from_message("根据我所在城市的实时天气给建议", "上海") == "上海"
+
+
+async def test_device_request_enters_device_graph_branch(
+    settings: Settings,
+) -> None:
+    device_control = FakeDeviceControl()
+
+    service, _, _ = create_service(
+        settings,
+        device_control=device_control,
+    )
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="device-status-session",
+            user_id="1001",
+            message="查看设备状态",
+        ),
+    )
+
+    text = "".join(event.data.get("text", "") for event in events if event.event == "token")
+
+    assert len(device_control.calls) == 1
+    assert device_control.calls[0]["session_id"] == ("device-status-session")
+    assert device_control.calls[0]["user_id"] == "1001"
+    assert device_control.calls[0]["request_id"]
+    assert events[-1].event == "done"
+    assert events[-1].data["intent"] == "device"
+    assert events[-1].data["model_called"] is False
+    assert "docked" in text
