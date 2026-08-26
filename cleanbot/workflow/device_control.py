@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+from langchain_core.language_models.chat_models import (
+    BaseChatModel,
+)
 
 from cleanbot.core.schemas import (
     DeviceActionResult,
     DeviceActionView,
+    DeviceIntentDecision,
+    DeviceOperation,
 )
 from cleanbot.db.database import Database
 from cleanbot.db.models import DeviceActionName
@@ -24,22 +30,41 @@ class DeviceControlOutcome:
     result: DeviceActionResult | None = None
 
 
-ACTION_PHRASES = {
-    DeviceActionName.START_CLEANING: (
+OPERATION_PHRASES = {
+    DeviceOperation.READ_STATUS: (
+        "设备状态",
+        "当前状态",
+        "机器人状态",
+        "剩余电量",
+        "还有多少电",
+    ),
+    DeviceOperation.READ_CONSUMABLE: (
+        "耗材剩余",
+        "耗材还剩",
+        "耗材状态",
+    ),
+    DeviceOperation.START_CLEANING: (
         "开始清扫",
         "开始打扫",
         "启动清扫",
     ),
-    DeviceActionName.PAUSE_CLEANING: (
+    DeviceOperation.PAUSE_CLEANING: (
         "暂停清扫",
         "暂停打扫",
     ),
-    DeviceActionName.RETURN_TO_DOCK: (
+    DeviceOperation.RETURN_TO_DOCK: (
         "返回充电座",
         "回到充电座",
         "立即回充",
         "开始回充",
     ),
+}
+
+
+OPERATION_ACTIONS = {
+    DeviceOperation.START_CLEANING: (DeviceActionName.START_CLEANING),
+    DeviceOperation.PAUSE_CLEANING: (DeviceActionName.PAUSE_CLEANING),
+    DeviceOperation.RETURN_TO_DOCK: (DeviceActionName.RETURN_TO_DOCK),
 }
 
 
@@ -49,20 +74,86 @@ class DeviceControlService:
         database: Database,
         approval_workflow: DeviceApprovalWorkflow,
         mcp_client: DeviceMCPClient,
+        model: BaseChatModel | None = None,
     ) -> None:
         self.database = database
         self.approval_workflow = approval_workflow
         self.mcp_client = mcp_client
+        self.model = model
 
     @staticmethod
-    def action_from_message(
+    def deterministic_operation(
         message: str,
-    ) -> DeviceActionName | None:
-        for action_name, phrases in ACTION_PHRASES.items():
+    ) -> DeviceOperation | None:
+        for operation, phrases in OPERATION_PHRASES.items():
             if any(phrase in message for phrase in phrases):
-                return action_name
+                return operation
 
         return None
+
+    @staticmethod
+    def _message_text(message: Any) -> str:
+        content = getattr(message, "content", message)
+
+        if isinstance(content, str):
+            return content
+
+        return str(content)
+
+    async def resolve_operation(
+        self,
+        message: str,
+    ) -> DeviceOperation:
+        direct = self.deterministic_operation(message)
+
+        if direct is not None:
+            return direct
+
+        if self.model is None:
+            return DeviceOperation.UNKNOWN
+
+        try:
+            response = await self.model.ainvoke(
+                """Classify the user's intended operation for their
+simulated cleaning robot.
+
+Allowed operations:
+- read_status
+- read_consumable
+- start_cleaning
+- pause_cleaning
+- return_to_dock
+- unknown
+
+Rules:
+1. Questions about faults, maintenance or general product knowledge
+   are unknown, not device commands.
+2. Use a write operation only when the user is asking the current
+   simulated device to perform that action.
+3. Return only one JSON object:
+{"operation":"start_cleaning","confidence":0.95}
+4. Do not return reasoning or Markdown.
+
+User message:
+"""
+                + message
+            )
+
+            content = self._message_text(response)
+            start = content.find("{")
+            end = content.rfind("}")
+
+            if start >= 0 and end > start:
+                content = content[start : end + 1]
+
+            decision = DeviceIntentDecision.model_validate_json(content)
+
+            if decision.confidence < 0.75:
+                return DeviceOperation.UNKNOWN
+
+            return decision.operation
+        except Exception:
+            return DeviceOperation.UNKNOWN
 
     async def prepare(
         self,
@@ -73,23 +164,33 @@ class DeviceControlService:
         message: str,
     ) -> DeviceControlOutcome:
         device = self.database.get_user_device_status(user_id)
-        action_name = self.action_from_message(message)
+        operation = await self.resolve_operation(message)
 
-        if action_name is None:
-            if "耗材" in message:
-                consumable = await self.mcp_client.get_consumable_status(
-                    user_id,
-                    device.device_id,
-                )
-                return DeviceControlOutcome(
-                    kind="answer",
-                    message=(
-                        f"模拟设备耗材剩余 "
-                        f"{consumable.consumable_percent}%"
-                        f"{'，建议尽快更换。' if consumable.replacement_recommended else '。'}"
-                    ),
-                )
+        if operation is DeviceOperation.UNKNOWN:
+            return DeviceControlOutcome(
+                kind="answer",
+                message=(
+                    "我没有准确理解你希望查询还是操作设备。"
+                    "请明确说明查看状态、查看耗材、开始清扫、"
+                    "暂停清扫或返回充电座。"
+                ),
+            )
 
+        if operation is DeviceOperation.READ_CONSUMABLE:
+            consumable = await self.mcp_client.get_consumable_status(
+                user_id,
+                device.device_id,
+            )
+            return DeviceControlOutcome(
+                kind="answer",
+                message=(
+                    f"模拟设备耗材剩余 "
+                    f"{consumable.consumable_percent}%"
+                    f"{'，建议尽快更换。' if consumable.replacement_recommended else '。'}"
+                ),
+            )
+
+        if operation is DeviceOperation.READ_STATUS:
             status = await self.mcp_client.get_device_status(
                 user_id,
                 device.device_id,
@@ -98,6 +199,8 @@ class DeviceControlService:
                 kind="answer",
                 message=(f"模拟设备当前状态为 {status.status}，剩余电量 {status.battery_percent}%。"),
             )
+
+        action_name = OPERATION_ACTIONS[operation]
 
         checkpoint_thread_id = f"device:{session_id}:{request_id}"
         pending = self.database.create_pending_device_action(

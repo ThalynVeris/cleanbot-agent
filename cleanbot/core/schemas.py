@@ -20,6 +20,20 @@ class IntentDecision(BaseModel):
     reason: str = Field(description="Short classification reason; never include chain-of-thought")
 
 
+class DeviceOperation(str, Enum):
+    READ_STATUS = "read_status"
+    READ_CONSUMABLE = "read_consumable"
+    START_CLEANING = "start_cleaning"
+    PAUSE_CLEANING = "pause_cleaning"
+    RETURN_TO_DOCK = "return_to_dock"
+    UNKNOWN = "unknown"
+
+
+class DeviceIntentDecision(BaseModel):
+    operation: DeviceOperation
+    confidence: float = Field(ge=0, le=1)
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=8, max_length=128)
     user_id: str = Field(min_length=1, max_length=64)
