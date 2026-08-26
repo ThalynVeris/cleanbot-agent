@@ -16,6 +16,9 @@ async def test_deterministic_routes_do_not_require_model() -> None:
     assert await router.classify("扫地机器人主刷不转") == Intent.KNOWLEDGE
     assert await router.classify("你好") == Intent.SMALLTALK
     assert await router.classify("写一个快速排序") == Intent.OUT_OF_SCOPE
+    assert await router.classify("请开始清扫") == Intent.DEVICE
+    assert await router.classify("查看设备状态") == Intent.DEVICE
+    assert await router.classify("开始清扫前要注意什么") == Intent.KNOWLEDGE
 
 
 async def test_capability_questions_do_not_call_model() -> None:
@@ -79,3 +82,21 @@ async def test_weather_failure_is_explicit(settings: Settings) -> None:
     result = await WeatherClient(settings, httpx.MockTransport(handler)).current("上海")
     assert result.ok is False
     assert "网络、DNS 或 VPN 代理" in (result.error or "")
+
+
+async def test_model_fallback_can_route_ambiguous_device_request() -> None:
+    class DeviceIntentModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def ainvoke(self, prompt):
+            self.calls += 1
+            return AIMessage(content=('{"intent":"device","reason":"current device command"}'))
+
+    model = DeviceIntentModel()
+    router = IntentRouter(model)  # type: ignore[arg-type]
+
+    result = await router.classify("让它去干活吧")
+
+    assert result == Intent.DEVICE
+    assert model.calls == 1

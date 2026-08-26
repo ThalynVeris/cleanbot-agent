@@ -11,6 +11,7 @@ class Intent(str, Enum):
     KNOWLEDGE = "knowledge"
     REPORT = "report"
     ENVIRONMENT = "environment"
+    DEVICE = "device"
     SMALLTALK = "smalltalk"
     OUT_OF_SCOPE = "out_of_scope"
 
