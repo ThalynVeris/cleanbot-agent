@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from cleanbot.core.config import get_settings
 from cleanbot.core.schemas import (
@@ -13,6 +16,14 @@ from cleanbot.core.schemas import (
 )
 from cleanbot.db.database import Database
 from cleanbot.db.models import DeviceActionName
+
+DEVICE_MCP_TRANSPORT_SECURITY = TransportSecuritySettings(
+    allowed_hosts=[
+        "device-mcp:8001",
+        "127.0.0.1:*",
+        "localhost:*",
+    ],
+)
 
 
 def create_device_mcp(database: Database) -> MCPServer:
@@ -91,4 +102,19 @@ def create_app() -> Starlette:
 
     server = create_device_mcp(database)
 
-    return server.streamable_http_app(streamable_http_path="/mcp", stateless_http=True)
+    def health(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "status": "ok",
+                "service": "device-mcp",
+                "users": len(database.list_users()),
+            }
+        )
+
+    app = server.streamable_http_app(
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        transport_security=DEVICE_MCP_TRANSPORT_SECURITY,
+    )
+    app.add_route("/health", health, methods=["GET"])
+    return app
