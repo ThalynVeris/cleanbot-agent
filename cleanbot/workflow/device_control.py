@@ -296,7 +296,14 @@ User message:
             )
 
         result = await self.mcp_client.execute(decided)
+        final_action = self.database.get_device_action(
+            action_id=decided.id,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
+        if final_action is None:
+            raise RuntimeError("Executed device action disappeared")
         return DeviceControlOutcome(
             kind="answer",
             message=(
@@ -304,6 +311,6 @@ User message:
                 if result.ok
                 else f"模拟设备操作失败：{result.message}"
             ),
-            action=decided,
+            action=final_action,
             result=result,
         )

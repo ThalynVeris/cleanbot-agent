@@ -19,6 +19,9 @@ from cleanbot.core.schemas import (
     ChatRequest,
     ChatSessionSummary,
     DemoUser,
+    DeviceActionDecisionRequest,
+    DeviceActionDecisionResponse,
+    DeviceActionView,
     IngestResult,
     StoredMessage,
 )
@@ -107,6 +110,21 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
             },
         )
 
+    @app.get(
+        "/api/v1/device/actions/pending",
+        response_model=DeviceActionView | None,
+        tags=["device"],
+    )
+    async def pending_device_action(
+        session_id: str,
+        user_id: str,
+    ) -> DeviceActionView | None:
+        return await asyncio.to_thread(
+            services().database.get_pending_device_action,
+            session_id=session_id,
+            user_id=user_id,
+        )
+
     @app.get("/api/v1/sessions/{session_id}/messages", response_model=list[StoredMessage], tags=["chat"])
     async def session_messages(session_id: str) -> list[StoredMessage]:
         return await asyncio.to_thread(services().database.get_messages, session_id, 100)
@@ -122,6 +140,40 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     @app.get("/api/v1/demo/users/{user_id}/months", response_model=list[str], tags=["demo"])
     async def demo_months(user_id: str) -> list[str]:
         return await asyncio.to_thread(services().database.list_months, user_id)
+
+    @app.post(
+        ("/api/v1/device/actions/{action_id}/decision"),
+        response_model=(DeviceActionDecisionResponse),
+        tags=["device"],
+    )
+    async def decide_device_action(
+        action_id: str,
+        request: DeviceActionDecisionRequest,
+    ) -> DeviceActionDecisionResponse:
+        try:
+            outcome = await services().device_control.decide(
+                action_id=action_id,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                approve=(request.decision == "approve"),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=("Device action is not available for this request"),
+            ) from exc
+
+        if outcome.action is None:
+            raise HTTPException(
+                status_code=500,
+                detail=("Device decision returned no action state"),
+            )
+
+        return DeviceActionDecisionResponse(
+            message=outcome.message,
+            action=outcome.action,
+            result=outcome.result,
+        )
 
     @app.post(
         "/api/v1/knowledge/documents",

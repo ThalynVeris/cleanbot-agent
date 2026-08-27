@@ -101,3 +101,5 @@ async def test_device_control_pauses_approves_and_executes(
 
     device = database.get_user_device_status("1001")
     assert device.status == "cleaning"
+    assert completed.action is not None
+    assert completed.action.status == "succeeded"

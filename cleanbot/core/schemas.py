@@ -165,6 +165,27 @@ class DeviceActionView(BaseModel):
     created_at: datetime
 
 
+class DeviceActionDecisionRequest(BaseModel):
+    user_id: str = Field(
+        min_length=1,
+        max_length=64,
+    )
+    session_id: str = Field(
+        min_length=8,
+        max_length=128,
+    )
+    decision: Literal[
+        "approve",
+        "reject",
+    ]
+
+
+class DeviceActionDecisionResponse(BaseModel):
+    message: str
+    action: DeviceActionView
+    result: DeviceActionResult | None = None
+
+
 class StoredMessage(BaseModel):
     id: int
     session_id: str

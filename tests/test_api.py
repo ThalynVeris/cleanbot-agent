@@ -8,6 +8,12 @@ from cleanbot.api.app import create_app
 from cleanbot.core.config import Settings
 from cleanbot.core.schemas import ChatEvent, IngestResult
 from cleanbot.db.database import Database
+from cleanbot.db.models import (
+    DeviceActionName,
+)
+from cleanbot.workflow.device_control import (
+    DeviceControlOutcome,
+)
 
 
 class FakeKnowledgeBase:
@@ -47,6 +53,45 @@ class FakeAgent:
         yield ChatEvent(event="done", request_id="request-1", data={"intent": "knowledge"})
 
 
+class FakeDeviceControl:
+    def __init__(
+        self,
+        database: Database,
+    ) -> None:
+        self.database = database
+        self.calls: list[dict[str, object]] = []
+
+    async def decide(
+        self,
+        *,
+        action_id: str,
+        user_id: str,
+        session_id: str,
+        approve: bool,
+    ) -> DeviceControlOutcome:
+        self.calls.append(
+            {
+                "action_id": action_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "approve": approve,
+            }
+        )
+
+        action = self.database.decide_device_action(
+            action_id=action_id,
+            user_id=user_id,
+            session_id=session_id,
+            approve=approve,
+        )
+
+        return DeviceControlOutcome(
+            kind="answer",
+            message=("操作已批准。" if approve else "操作已拒绝。"),
+            action=action,
+        )
+
+
 class FakeContainer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -54,6 +99,7 @@ class FakeContainer:
         self.knowledge_base = FakeKnowledgeBase()
         self.retriever = FakeRetriever()
         self.agent = FakeAgent()
+        self.device_control = FakeDeviceControl(self.database)
 
     def initialize(self) -> None:
         self.database.create_schema()
@@ -123,3 +169,83 @@ def test_list_user_sessions_endpoint(settings: Settings) -> None:
         other_user = client.get("/api/v1/demo/users/1002/sessions")
         assert other_user.status_code == 200
         assert other_user.json() == []
+
+
+def test_pending_and_device_decision_endpoints(
+    settings: Settings,
+) -> None:
+    container = FakeContainer(settings)
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        container.database.ensure_session(
+            "device-api-session",
+            "1001",
+        )
+
+        pending = container.database.create_pending_device_action(
+            session_id="device-api-session",
+            user_id="1001",
+            action_name=(DeviceActionName.START_CLEANING),
+            idempotency_key=("device-api-request:start_cleaning"),
+            checkpoint_thread_id=("device:device-api-session:request-001"),
+        )
+
+        restored = client.get(
+            "/api/v1/device/actions/pending",
+            params={
+                "session_id": ("device-api-session"),
+                "user_id": "1001",
+            },
+        )
+
+        assert restored.status_code == 200
+        assert restored.json()["id"] == pending.id
+        assert restored.json()["status"] == ("pending")
+
+        hidden = client.get(
+            "/api/v1/device/actions/pending",
+            params={
+                "session_id": ("device-api-session"),
+                "user_id": "1002",
+            },
+        )
+
+        assert hidden.status_code == 200
+        assert hidden.json() is None
+
+        decision = client.post(
+            (f"/api/v1/device/actions/{pending.id}/decision"),
+            json={
+                "user_id": "1001",
+                "session_id": ("device-api-session"),
+                "decision": "approve",
+            },
+        )
+
+        assert decision.status_code == 200
+        assert decision.json()["action"]["status"] == "approved"
+
+        calls = container.device_control.calls
+
+        assert len(calls) == 1
+        assert calls[0]["approve"] is True
+
+
+def test_device_decision_rejects_invalid_value(
+    settings: Settings,
+) -> None:
+    container = FakeContainer(settings)
+    app = create_app(container)
+
+    with TestClient(app) as client:
+        response = client.post(
+            ("/api/v1/device/actions/missing-action/decision"),
+            json={
+                "user_id": "1001",
+                "session_id": ("device-api-session"),
+                "decision": "yes",
+            },
+        )
+
+    assert response.status_code == 422
