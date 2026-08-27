@@ -13,6 +13,10 @@ from cleanbot.db.models import (
     DeviceActionStatus,
     utc_now,
 )
+from cleanbot.device_mcp.client import (
+    DeviceMCPCallError,
+    DeviceMCPClient,
+)
 from cleanbot.device_mcp.server import create_device_mcp
 
 
@@ -229,3 +233,53 @@ async def test_mcp_rejects_access_to_another_users_device(
         assert result.is_error is True
         assert result.structured_content is None
         assert "not available for this user" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_translates_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TimeoutClient:
+        def __init__(
+            self,
+            *args,
+            **kwargs,
+        ) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type,
+            exc,
+            traceback,
+        ) -> None:
+            return None
+
+        async def call_tool(
+            self,
+            tool_name,
+            arguments,
+        ):
+            raise TimeoutError
+
+    monkeypatch.setattr(
+        "cleanbot.device_mcp.client.Client",
+        TimeoutClient,
+    )
+
+    client = DeviceMCPClient(
+        "http://device-mcp:8001/mcp",
+        timeout_seconds=0.01,
+    )
+
+    with pytest.raises(
+        DeviceMCPCallError,
+        match="timed out",
+    ):
+        await client.get_device_status(
+            "1001",
+            "demo-device-1001",
+        )

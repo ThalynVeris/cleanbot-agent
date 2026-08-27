@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from mcp import Client
 
 from cleanbot.core.schemas import (
@@ -30,14 +31,22 @@ class DeviceMCPClient:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        async with Client(
-            self.server,
-            read_timeout_seconds=self.timeout_seconds,
-        ) as client:
-            result = await client.call_tool(
-                tool_name,
-                arguments,
-            )
+        try:
+            async with Client(
+                self.server,
+                read_timeout_seconds=(self.timeout_seconds),
+            ) as client:
+                result = await client.call_tool(
+                    tool_name,
+                    arguments,
+                )
+        except (
+            TimeoutError,
+            httpx.TimeoutException,
+        ) as exc:
+            raise DeviceMCPCallError("Device MCP call timed out") from exc
+        except Exception as exc:
+            raise DeviceMCPCallError("Device MCP transport unavailable") from exc
 
         if result.is_error:
             message = "Device MCP tool failed"

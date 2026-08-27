@@ -403,6 +403,35 @@ class Database:
 
             return self._device_action_schema(action)
 
+    def fail_device_action(
+        self,
+        *,
+        action_id: str,
+        user_id: str,
+        session_id: str,
+        error_type: str,
+    ) -> DeviceActionView:
+        with self.session() as db:
+            action = db.scalar(
+                select(DeviceAction)
+                .where(
+                    DeviceAction.id == action_id,
+                    DeviceAction.user_id == user_id,
+                    DeviceAction.session_id == session_id,
+                )
+                .with_for_update()
+            )
+
+            if action is None:
+                raise DeviceActionApprovalError("Device action is not available for this request")
+
+            if action.status is DeviceActionStatus.APPROVED:
+                action.status = DeviceActionStatus.FAILED
+                action.error_type = error_type
+                action.executed_at = utc_now()
+
+            return self._device_action_schema(action)
+
     def get_device_action(
         self,
         *,

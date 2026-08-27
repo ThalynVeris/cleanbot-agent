@@ -12,7 +12,10 @@ from cleanbot.db.models import (
     DeviceAction,
     utc_now,
 )
-from cleanbot.device_mcp.client import DeviceMCPClient
+from cleanbot.device_mcp.client import (
+    DeviceMCPCallError,
+    DeviceMCPClient,
+)
 from cleanbot.device_mcp.server import create_device_mcp
 from cleanbot.workflow.device_approval import (
     DeviceApprovalWorkflow,
@@ -20,6 +23,11 @@ from cleanbot.workflow.device_approval import (
 from cleanbot.workflow.device_control import (
     DeviceControlService,
 )
+
+
+class FailingDeviceMCPClient:
+    async def execute(self, action):
+        raise DeviceMCPCallError("internal transport details")
 
 
 class FakeDeviceIntentModel:
@@ -275,6 +283,47 @@ async def test_another_user_cannot_decide_action(
 
     assert stored is not None
     assert stored.status == "pending"
+
+    device = database.get_user_device_status("1001")
+    assert device.status == "docked"
+
+
+async def test_mcp_failure_marks_action_failed(
+    settings: Settings,
+) -> None:
+    database = Database(settings)
+    database.create_schema()
+    database.seed_demo_data()
+
+    control = DeviceControlService(
+        database=database,
+        approval_workflow=(DeviceApprovalWorkflow(InMemorySaver())),
+        mcp_client=(FailingDeviceMCPClient()),  # type: ignore[arg-type]
+    )
+
+    pending = await control.prepare(
+        session_id="mcp-failure-session",
+        user_id="1001",
+        request_id="mcp-failure-request",
+        message="请开始清扫",
+    )
+
+    assert pending.action is not None
+
+    failed = await control.decide(
+        action_id=pending.action.id,
+        user_id="1001",
+        session_id="mcp-failure-session",
+        approve=True,
+    )
+
+    assert failed.action is not None
+    assert failed.action.status == "failed"
+    assert failed.action.error_type == ("DeviceMCPCallError")
+    assert failed.result is None
+
+    assert failed.message == ("设备服务暂时不可用，本次操作未执行。")
+    assert "internal transport details" not in failed.message
 
     device = database.get_user_device_status("1001")
     assert device.status == "docked"

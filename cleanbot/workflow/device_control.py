@@ -16,7 +16,10 @@ from cleanbot.core.schemas import (
 )
 from cleanbot.db.database import Database
 from cleanbot.db.models import DeviceActionName
-from cleanbot.device_mcp.client import DeviceMCPClient
+from cleanbot.device_mcp.client import (
+    DeviceMCPCallError,
+    DeviceMCPClient,
+)
 from cleanbot.workflow.device_approval import (
     DeviceApprovalWorkflow,
 )
@@ -295,7 +298,21 @@ User message:
                 action=decided,
             )
 
-        result = await self.mcp_client.execute(decided)
+        try:
+            result = await self.mcp_client.execute(decided)
+        except DeviceMCPCallError as exc:
+            failed = self.database.fail_device_action(
+                action_id=decided.id,
+                user_id=user_id,
+                session_id=session_id,
+                error_type=type(exc).__name__,
+            )
+
+            return DeviceControlOutcome(
+                kind="answer",
+                message=("设备服务暂时不可用，本次操作未执行。"),
+                action=failed,
+            )
         final_action = self.database.get_device_action(
             action_id=decided.id,
             user_id=user_id,
