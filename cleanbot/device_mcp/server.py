@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import secrets
 
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cleanbot.core.config import get_settings
 from cleanbot.core.schemas import (
@@ -24,6 +27,40 @@ DEVICE_MCP_TRANSPORT_SECURITY = TransportSecuritySettings(
         "localhost:*",
     ],
 )
+
+
+class MCPTokenMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        token: str,
+    ) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        path = scope.get("path", "")
+        protected = scope["type"] == "http" and path.startswith("/mcp")
+
+        if protected:
+            supplied = Headers(scope=scope).get("authorization", "")
+            expected = f"Bearer {self.token}"
+
+            if not secrets.compare_digest(supplied, expected):
+                response = JSONResponse(
+                    {"detail": "Invalid MCP token"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)
 
 
 def create_device_mcp(database: Database) -> MCPServer:
@@ -117,4 +154,8 @@ def create_app() -> Starlette:
         transport_security=DEVICE_MCP_TRANSPORT_SECURITY,
     )
     app.add_route("/health", health, methods=["GET"])
+    app.add_middleware(
+        MCPTokenMiddleware,
+        token=settings.device_mcp_token,
+    )
     return app

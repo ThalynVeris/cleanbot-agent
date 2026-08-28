@@ -40,8 +40,10 @@ class AppContainer:
         mcp_transport = self.settings.device_mcp_url or create_device_mcp(self.database)
         self.device_mcp = DeviceMCPClient(
             mcp_transport,
-            timeout_seconds=(self.settings.device_mcp_timeout_seconds),
+            timeout_seconds=self.settings.device_mcp_timeout_seconds,
+            token=self.settings.device_mcp_token,
         )
+
         self.device_control = DeviceControlService(
             database=self.database,
             approval_workflow=(self.device_approval),

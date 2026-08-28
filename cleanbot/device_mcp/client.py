@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from typing import Any
 
 import httpx
+import httpx2
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 
 from cleanbot.core.schemas import (
     ConsumableStatusView,
@@ -22,9 +25,11 @@ class DeviceMCPClient:
         self,
         server: Any,
         timeout_seconds: float = 5,
+        token: str | None = None,
     ) -> None:
         self.server = server
         self.timeout_seconds = timeout_seconds
+        self.token = token
 
     async def _call(
         self,
@@ -32,10 +37,29 @@ class DeviceMCPClient:
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         try:
-            async with Client(
-                self.server,
-                read_timeout_seconds=(self.timeout_seconds),
-            ) as client:
+            async with AsyncExitStack() as stack:
+                transport = self.server
+
+                if isinstance(self.server, str) and self.token:
+                    http_client = await stack.enter_async_context(
+                        httpx2.AsyncClient(
+                            headers={
+                                "Authorization": f"Bearer {self.token}",
+                            },
+                            timeout=self.timeout_seconds,
+                        )
+                    )
+                    transport = streamable_http_client(
+                        self.server,
+                        http_client=http_client,
+                    )
+
+                client = await stack.enter_async_context(
+                    Client(
+                        transport,
+                        read_timeout_seconds=self.timeout_seconds,
+                    )
+                )
                 result = await client.call_tool(
                     tool_name,
                     arguments,
@@ -43,6 +67,7 @@ class DeviceMCPClient:
         except (
             TimeoutError,
             httpx.TimeoutException,
+            httpx2.TimeoutException,
         ) as exc:
             raise DeviceMCPCallError("Device MCP call timed out") from exc
         except Exception as exc:

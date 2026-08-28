@@ -44,5 +44,6 @@ def settings(tmp_path: Path) -> Settings:
         max_upload_bytes=1024 * 1024,
         device_checkpoint_path=(runtime / "device-checkpoints.sqlite"),
         device_mcp_url=None,
+        device_mcp_token="test-device-mcp-token",
         device_mcp_timeout_seconds=1,
     )

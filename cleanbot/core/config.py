@@ -65,6 +65,7 @@ class Settings:
     max_upload_bytes: int
     device_checkpoint_path: Path
     device_mcp_url: str | None
+    device_mcp_token: str
     device_mcp_timeout_seconds: float
 
     def ensure_runtime_dirs(self) -> None:
@@ -115,6 +116,10 @@ def get_settings() -> Settings:
             runtime_dir / "device-checkpoints.sqlite",
         ),
         device_mcp_url=(os.getenv("DEVICE_MCP_URL") or None),
+        device_mcp_token=os.getenv(
+            "DEVICE_MCP_TOKEN",
+            "change-me-before-deployment",
+        ),
         device_mcp_timeout_seconds=float(
             os.getenv(
                 "DEVICE_MCP_TIMEOUT_SECONDS",

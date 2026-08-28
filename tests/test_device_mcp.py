@@ -4,6 +4,12 @@ import json
 
 import pytest
 from mcp import Client
+from mcp.server.transport_security import TransportSecurityMiddleware
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from starlette.testclient import TestClient
 
 from cleanbot.core.config import Settings
 from cleanbot.db.database import Database
@@ -17,7 +23,36 @@ from cleanbot.device_mcp.client import (
     DeviceMCPCallError,
     DeviceMCPClient,
 )
-from cleanbot.device_mcp.server import create_device_mcp
+from cleanbot.device_mcp.server import (
+    DEVICE_MCP_TRANSPORT_SECURITY,
+    MCPTokenMiddleware,
+    create_device_mcp,
+)
+
+
+@pytest.mark.asyncio
+async def test_mcp_transport_allows_docker_service_host() -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"host", b"device-mcp:8001"),
+                (b"content-type", b"application/json"),
+            ],
+        }
+    )
+    middleware = TransportSecurityMiddleware(
+        DEVICE_MCP_TRANSPORT_SECURITY,
+    )
+
+    rejection = await middleware.validate_request(
+        request,
+        is_post=True,
+    )
+
+    assert rejection is None
 
 
 def add_device_action(
@@ -283,3 +318,37 @@ async def test_mcp_client_translates_timeout(
             "1001",
             "demo-device-1001",
         )
+
+
+def test_mcp_token_middleware_requires_matching_token() -> None:
+    async def endpoint(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    app = Starlette(
+        routes=[
+            Route("/mcp", endpoint, methods=["POST"]),
+            Route("/health", endpoint, methods=["GET"]),
+        ]
+    )
+    app.add_middleware(
+        MCPTokenMiddleware,
+        token="test-secret",
+    )
+
+    with TestClient(app) as client:
+        assert client.post("/mcp").status_code == 401
+        assert (
+            client.post(
+                "/mcp",
+                headers={"Authorization": "Bearer wrong"},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/mcp",
+                headers={"Authorization": "Bearer test-secret"},
+            ).status_code
+            == 200
+        )
+        assert client.get("/health").status_code == 200
