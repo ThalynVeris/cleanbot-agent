@@ -142,6 +142,7 @@ def test_session_children_relationship_and_delete_cascade(
                 selectinload(ChatSession.messages),
                 selectinload(ChatSession.device_actions),
             )
+            .where(ChatSession.id == "session-relations")
         )
 
         assert chat_session is not None
