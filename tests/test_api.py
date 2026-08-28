@@ -39,6 +39,14 @@ class FakeKnowledgeBase:
         return True
 
 
+class FakeDeviceMCP:
+    def __init__(self) -> None:
+        self.healthy = True
+
+    async def health(self) -> bool:
+        return self.healthy
+
+
 class FakeRetriever:
     def __init__(self) -> None:
         self.invalidations = 0
@@ -97,6 +105,7 @@ class FakeContainer:
         self.settings = settings
         self.database = Database(settings)
         self.knowledge_base = FakeKnowledgeBase()
+        self.device_mcp = FakeDeviceMCP()
         self.retriever = FakeRetriever()
         self.agent = FakeAgent()
         self.device_control = FakeDeviceControl(self.database)
@@ -113,6 +122,7 @@ def test_health_demo_chat_and_admin_knowledge_endpoints(settings: Settings) -> N
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["chunks"] == 7
+        assert health.json()["device_mcp"] == "ok"
 
         users = client.get("/api/v1/demo/users").json()
         assert len(users) == 10
@@ -169,6 +179,20 @@ def test_list_user_sessions_endpoint(settings: Settings) -> None:
         other_user = client.get("/api/v1/demo/users/1002/sessions")
         assert other_user.status_code == 200
         assert other_user.json() == []
+
+
+def test_health_returns_503_when_device_mcp_is_unhealthy(
+    settings: Settings,
+) -> None:
+    container = FakeContainer(settings)
+    container.device_mcp.healthy = False
+    app = create_app(container)  # type: ignore[arg-type]
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == ("Health check failed: RuntimeError")
 
 
 def test_pending_and_device_decision_endpoints(

@@ -90,6 +90,24 @@ class DeviceMCPClient:
 
         return result.structured_content
 
+    async def health(self) -> bool:
+        if not isinstance(self.server, str):
+            return True
+
+        health_url = self.server.rsplit("/", 1)[0] + "/health"
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+            ) as client:
+                response = await client.get(health_url)
+                response.raise_for_status()
+                payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise DeviceMCPCallError("Device MCP health check failed") from exc
+
+        return payload.get("status") == "ok"
+
     async def get_device_status(
         self,
         user_id: str,

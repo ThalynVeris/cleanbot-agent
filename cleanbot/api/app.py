@@ -83,10 +83,15 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         try:
             user_count = len(await asyncio.to_thread(current.database.list_users))
             chunk_count = await asyncio.to_thread(current.knowledge_base.count)
+            mcp_healthy = await current.device_mcp.health()
+
+            if not mcp_healthy:
+                raise RuntimeError("Device MCP is unhealthy")
             return {
                 "status": "ok" if user_count > 0 else "degraded",
                 "database": "ok" if user_count > 0 else "empty",
                 "vector_store": "ok" if chunk_count > 0 else "empty",
+                "device_mcp": "ok",
                 "users": user_count,
                 "chunks": chunk_count,
                 "collection": current.settings.collection_name,
