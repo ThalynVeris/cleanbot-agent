@@ -111,7 +111,7 @@ def test_new_message_moves_session_to_front(settings: Settings) -> None:
     assert [item.id for item in sessions] == ["session-older", "session-newer"]
 
 
-def test_session_messages_relationship_and_delete_cascade(
+def test_session_children_relationship_and_delete_cascade(
     settings: Settings,
 ) -> None:
     database = Database(settings)
@@ -129,12 +129,19 @@ def test_session_messages_relationship_and_delete_cascade(
         "assistant",
         "第二条消息",
     )
-
+    action = database.create_pending_device_action(
+        session_id="session-relations",
+        user_id="1001",
+        action_name=DeviceActionName.START_CLEANING,
+        idempotency_key="session-relations:start-cleaning",
+        checkpoint_thread_id="device:session-relations",
+    )
     with database.session() as db:
         chat_session = db.scalar(
-            select(ChatSession)
-            .options(selectinload(ChatSession.messages))
-            .where(ChatSession.id == "session-relations")
+            select(ChatSession).options(
+                selectinload(ChatSession.messages),
+                selectinload(ChatSession.device_actions),
+            )
         )
 
         assert chat_session is not None
@@ -145,7 +152,10 @@ def test_session_messages_relationship_and_delete_cascade(
             "第二条消息",
         ]
         assert all(message.session is chat_session for message in chat_session.messages)
-
+        assert [item.id for item in chat_session.device_actions] == [
+            action.id,
+        ]
+        assert chat_session.device_actions[0].session is chat_session
         db.delete(chat_session)
 
     with database.session() as db:
@@ -153,7 +163,10 @@ def test_session_messages_relationship_and_delete_cascade(
         remaining_messages = db.scalars(
             select(Message).where(Message.session_id == "session-relations")
         ).all()
-
+        remaining_actions = db.scalars(
+            select(DeviceAction).where(DeviceAction.session_id == "session-relations")
+        ).all()
+        assert remaining_actions == []
         assert deleted_session is None
         assert remaining_messages == []
 

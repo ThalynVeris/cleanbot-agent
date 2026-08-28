@@ -145,6 +145,7 @@ class ChatSession(Base):
     )
     device_actions: Mapped[list[DeviceAction]] = relationship(
         back_populates="session",
+        cascade="all, delete-orphan",
     )
 
 
