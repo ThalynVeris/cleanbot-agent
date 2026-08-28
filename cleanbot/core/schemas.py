@@ -11,6 +11,7 @@ class Intent(str, Enum):
     KNOWLEDGE = "knowledge"
     REPORT = "report"
     ENVIRONMENT = "environment"
+    DEVICE = "device"
     SMALLTALK = "smalltalk"
     OUT_OF_SCOPE = "out_of_scope"
 
@@ -18,6 +19,20 @@ class Intent(str, Enum):
 class IntentDecision(BaseModel):
     intent: Intent
     reason: str = Field(description="Short classification reason; never include chain-of-thought")
+
+
+class DeviceOperation(str, Enum):
+    READ_STATUS = "read_status"
+    READ_CONSUMABLE = "read_consumable"
+    START_CLEANING = "start_cleaning"
+    PAUSE_CLEANING = "pause_cleaning"
+    RETURN_TO_DOCK = "return_to_dock"
+    UNKNOWN = "unknown"
+
+
+class DeviceIntentDecision(BaseModel):
+    operation: DeviceOperation
+    confidence: float = Field(ge=0, le=1)
 
 
 class ChatRequest(BaseModel):
@@ -73,6 +88,104 @@ class DeviceReport(BaseModel):
     comparison: str
 
 
+class DeviceStatusView(BaseModel):
+    device_id: str
+    user_id: str
+    model: str
+    status: Literal[
+        "docked",
+        "cleaning",
+        "paused",
+        "returning_to_dock",
+    ]
+    battery_percent: int = Field(ge=0, le=100)
+    simulated: bool = True
+
+
+class ConsumableStatusView(BaseModel):
+    device_id: str
+    user_id: str
+    consumable_percent: int = Field(ge=0, le=100)
+    replacement_recommended: bool
+    simulated: bool = True
+
+
+class DeviceCapabilitiesView(BaseModel):
+    device_id: str
+    model: str
+    supported_actions: list[str]
+    readable_properties: list[str]
+    simulated: bool = True
+
+
+class DeviceActionResult(BaseModel):
+    ok: bool
+    action_id: str
+    device_id: str
+    action: Literal[
+        "start_cleaning",
+        "pause_cleaning",
+        "return_to_dock",
+    ]
+    action_status: Literal["succeeded", "failed"]
+    device_status: Literal[
+        "docked",
+        "cleaning",
+        "paused",
+        "returning_to_dock",
+    ]
+    idempotent_replay: bool = False
+    error_type: str | None = None
+    message: str
+
+
+class DeviceActionView(BaseModel):
+    id: str
+    user_id: str
+    device_id: str
+    session_id: str
+    action: Literal[
+        "start_cleaning",
+        "pause_cleaning",
+        "return_to_dock",
+    ]
+    status: Literal[
+        "pending",
+        "approved",
+        "rejected",
+        "succeeded",
+        "failed",
+        "expired",
+    ]
+    checkpoint_thread_id: str
+    approval_expires_at: datetime
+    decided_at: datetime | None = None
+    executed_at: datetime | None = None
+    error_type: str | None = None
+    created_at: datetime
+
+
+class DeviceActionDecisionRequest(BaseModel):
+    user_id: str = Field(
+        min_length=1,
+        max_length=64,
+    )
+    session_id: str = Field(
+        min_length=8,
+        max_length=128,
+    )
+    decision: Literal[
+        "approve",
+        "reject",
+    ]
+
+
+class DeviceActionDecisionResponse(BaseModel):
+    message: str
+    action: DeviceActionView
+    result: DeviceActionResult | None = None
+
+
 class StoredMessage(BaseModel):
     id: int
     session_id: str
@@ -98,7 +211,14 @@ class DemoUser(BaseModel):
 
 
 class ChatEvent(BaseModel):
-    event: Literal["status", "source", "token", "done", "error"]
+    event: Literal[
+        "status",
+        "source",
+        "token",
+        "approval_required",
+        "done",
+        "error",
+    ]
     request_id: str
     data: dict[str, Any]
 

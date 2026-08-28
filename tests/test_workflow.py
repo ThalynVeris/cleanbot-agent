@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi.testclient import TestClient
@@ -9,8 +10,16 @@ from openai import APIConnectionError
 
 from cleanbot.api.app import create_app
 from cleanbot.core.config import Settings
-from cleanbot.core.schemas import ChatRequest, KnowledgeHit, WeatherResult
+from cleanbot.core.schemas import (
+    ChatRequest,
+    DeviceActionView,
+    KnowledgeHit,
+    WeatherResult,
+)
 from cleanbot.db.database import Database
+from cleanbot.workflow.device_control import (
+    DeviceControlOutcome,
+)
 from cleanbot.workflow.graph import CleanBotGraph
 from cleanbot.workflow.service import AgentService
 
@@ -72,7 +81,77 @@ class FakeWeather:
         return WeatherResult(ok=False, city=city, error="offline")
 
 
-def create_service(settings: Settings, model: FakeModel | None = None):
+class FakeDeviceControl:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    async def prepare(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        request_id: str,
+        message: str,
+    ) -> DeviceControlOutcome:
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "request_id": request_id,
+                "message": message,
+            }
+        )
+
+        return DeviceControlOutcome(
+            kind="answer",
+            message="模拟设备当前状态为 docked，剩余电量 85%。",
+        )
+
+
+class FakeApprovalDeviceControl(FakeDeviceControl):
+    async def prepare(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        request_id: str,
+        message: str,
+    ) -> DeviceControlOutcome:
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "user_id": user_id,
+                "request_id": request_id,
+                "message": message,
+            }
+        )
+
+        now = datetime.now(timezone.utc)
+
+        action = DeviceActionView(
+            id="pending-action-001",
+            user_id=user_id,
+            device_id="device-1001",
+            session_id=session_id,
+            action="start_cleaning",
+            status="pending",
+            checkpoint_thread_id=(f"device:{session_id}:{request_id}"),
+            approval_expires_at=(now + timedelta(minutes=30)),
+            created_at=now,
+        )
+
+        return DeviceControlOutcome(
+            kind="approval_required",
+            message=("是否允许模拟设备执行 start_cleaning？"),
+            action=action,
+        )
+
+
+def create_service(
+    settings: Settings,
+    model: FakeModel | None = None,
+    device_control=None,
+):
     database = Database(settings)
     database.create_schema()
     database.seed_demo_data()
@@ -84,6 +163,7 @@ def create_service(settings: Settings, model: FakeModel | None = None):
         weather=FakeWeather(),  # type: ignore[arg-type]
         model=model,  # type: ignore[arg-type]
         settings=settings,
+        device_control=device_control,
     )
     return AgentService(database, graph, model), database, retriever  # type: ignore[arg-type]
 
@@ -332,3 +412,84 @@ def test_environment_city_prefers_explicit_message_city() -> None:
     assert CleanBotGraph._city_from_message("请问北京现在天气如何", "上海") == "北京"
     assert CleanBotGraph._city_from_message("今天的天气怎么样", "上海") == "上海"
     assert CleanBotGraph._city_from_message("根据我所在城市的实时天气给建议", "上海") == "上海"
+
+
+async def test_device_request_enters_device_graph_branch(
+    settings: Settings,
+) -> None:
+    device_control = FakeDeviceControl()
+
+    service, _, _ = create_service(
+        settings,
+        device_control=device_control,
+    )
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="device-status-session",
+            user_id="1001",
+            message="查看设备状态",
+        ),
+    )
+
+    text = "".join(event.data.get("text", "") for event in events if event.event == "token")
+
+    assert len(device_control.calls) == 1
+    assert device_control.calls[0]["session_id"] == ("device-status-session")
+    assert device_control.calls[0]["user_id"] == "1001"
+    assert device_control.calls[0]["request_id"]
+    assert events[-1].event == "done"
+    assert events[-1].data["intent"] == "device"
+    assert events[-1].data["model_called"] is False
+    assert "docked" in text
+
+
+async def test_device_write_returns_approval_event(
+    settings: Settings,
+) -> None:
+    device_control = FakeApprovalDeviceControl()
+
+    service, database, _ = create_service(
+        settings,
+        device_control=device_control,
+    )
+
+    events = await collect(
+        service,
+        ChatRequest(
+            session_id="device-approval-session",
+            user_id="1001",
+            message="请开始清扫",
+        ),
+    )
+
+    assert [event.event for event in events] == [
+        "status",
+        "status",
+        "approval_required",
+        "done",
+    ]
+
+    approval = events[-2]
+
+    assert approval.data["message"] == ("是否允许模拟设备执行 start_cleaning？")
+    assert approval.data["action"]["id"] == ("pending-action-001")
+    assert approval.data["action"]["action"] == ("start_cleaning")
+    assert approval.data["action"]["status"] == ("pending")
+
+    done = events[-1]
+
+    assert done.data["intent"] == "device"
+    assert done.data["model_called"] is False
+    assert done.data["pending_approval"] is True
+
+    assert not any(event.event == "token" for event in events)
+
+    messages = database.get_messages("device-approval-session")
+
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+    ]
+    assert "start_cleaning" in (messages[-1].content)

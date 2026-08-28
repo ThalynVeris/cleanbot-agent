@@ -7,10 +7,18 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 
 from cleanbot.core.config import Settings, get_settings
-from cleanbot.core.schemas import DeviceReport, Intent, KnowledgeHit, SourceRef, WeatherResult
+from cleanbot.core.schemas import (
+    DeviceActionView,
+    DeviceReport,
+    Intent,
+    KnowledgeHit,
+    SourceRef,
+    WeatherResult,
+)
 from cleanbot.db.database import Database
 from cleanbot.rag.retriever import HybridRetriever
 from cleanbot.tools.weather import WeatherClient
+from cleanbot.workflow.device_control import DeviceControlService
 from cleanbot.workflow.router import IntentRouter
 
 
@@ -28,6 +36,9 @@ class AgentState(TypedDict, total=False):
     weather: WeatherResult | None
     answer_prompt: str
     direct_answer: str
+    request_id: str
+    approval_required: bool
+    device_action: DeviceActionView
 
 
 class CleanBotGraph:
@@ -39,6 +50,7 @@ class CleanBotGraph:
         model: BaseChatModel,
         settings: Settings | None = None,
         router: IntentRouter | None = None,
+        device_control: DeviceControlService | None = None,
     ) -> None:
         self.database = database
         self.retriever = retriever
@@ -46,6 +58,7 @@ class CleanBotGraph:
         self.model = model
         self.settings = settings or get_settings()
         self.router = router or IntentRouter(model)
+        self.device_control = device_control
         self.compiled = self._build()
 
     def _build(self):
@@ -57,6 +70,7 @@ class CleanBotGraph:
         graph.add_node("environment", self._prepare_environment)
         graph.add_node("smalltalk", self._prepare_smalltalk)
         graph.add_node("out_of_scope", self._prepare_out_of_scope)
+        graph.add_node("device", self._prepare_device)
         graph.add_edge(START, "load_context")
         graph.add_edge("load_context", "classify")
         graph.add_conditional_edges(
@@ -68,9 +82,17 @@ class CleanBotGraph:
                 Intent.ENVIRONMENT.value: "environment",
                 Intent.SMALLTALK.value: "smalltalk",
                 Intent.OUT_OF_SCOPE.value: "out_of_scope",
+                Intent.DEVICE.value: "device",
             },
         )
-        for node in ("knowledge", "report", "environment", "smalltalk", "out_of_scope"):
+        for node in (
+            "knowledge",
+            "report",
+            "environment",
+            "device",
+            "smalltalk",
+            "out_of_scope",
+        ):
             graph.add_edge(node, END)
         return graph.compile()
 
@@ -194,6 +216,34 @@ History:
             "answer_prompt": prompt,
             "month": month,
         }
+
+    async def _prepare_device(
+        self,
+        state: AgentState,
+    ) -> dict[str, Any]:
+        if self.device_control is None:
+            return {
+                "sources": [],
+                "direct_answer": "设备控制服务暂时不可用。",
+            }
+
+        outcome = await self.device_control.prepare(
+            session_id=state["session_id"],
+            user_id=state["user_id"],
+            request_id=state["request_id"],
+            message=state["message"],
+        )
+
+        result: dict[str, Any] = {
+            "sources": [],
+            "direct_answer": outcome.message,
+        }
+
+        if outcome.kind == "approval_required":
+            result["approval_required"] = True
+            result["device_action"] = outcome.action
+
+        return result
 
     async def _prepare_environment(self, state: AgentState) -> dict[str, Any]:
         user = self.database.get_user(state["user_id"])

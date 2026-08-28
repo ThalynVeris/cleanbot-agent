@@ -12,9 +12,28 @@ import streamlit as st
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 
 
-def api_get(path: str) -> Any:
+def api_get(
+    path: str,
+    params: dict[str, Any] | None = None,
+) -> Any:
     with httpx.Client(timeout=8) as client:
-        response = client.get(f"{API_BASE_URL}{path}")
+        response = client.get(
+            f"{API_BASE_URL}{path}",
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def api_post(
+    path: str,
+    payload: dict[str, Any],
+) -> Any:
+    with httpx.Client(timeout=15) as client:
+        response = client.post(
+            f"{API_BASE_URL}{path}",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 
@@ -53,7 +72,80 @@ def show_sources(sources: list[dict[str, Any]]) -> None:
             st.write(source.get("excerpt", ""))
 
 
-def stream_answer(payload: dict[str, Any], sources: list[dict[str, Any]], status_box) -> Iterator[str]:
+ACTION_LABELS = {
+    "start_cleaning": "开始清扫",
+    "pause_cleaning": "暂停清扫",
+    "return_to_dock": "返回充电座",
+}
+
+
+def show_pending_approval(
+    action: dict[str, Any],
+    *,
+    user_id: str,
+    session_id: str,
+) -> None:
+    action_id = action["id"]
+    action_name = action["action"]
+    action_label = ACTION_LABELS.get(
+        action_name,
+        action_name,
+    )
+
+    with st.container(border=True):
+        st.subheader("需要确认设备操作")
+        st.write(f"是否允许模拟设备执行：**{action_label}**？")
+        st.caption("这是演示设备操作，批准前不会改变设备状态。")
+        st.caption(f"审批到期时间：{action['approval_expires_at']}")
+
+        approve_column, reject_column = st.columns(2)
+
+        approve_clicked = approve_column.button(
+            "批准",
+            type="primary",
+            use_container_width=True,
+            key=f"approve_{action_id}",
+        )
+
+        reject_clicked = reject_column.button(
+            "拒绝",
+            use_container_width=True,
+            key=f"reject_{action_id}",
+        )
+
+        decision = None
+
+        if approve_clicked:
+            decision = "approve"
+        elif reject_clicked:
+            decision = "reject"
+
+        if decision is None:
+            return
+
+        try:
+            response = api_post(
+                (f"/api/v1/device/actions/{action_id}/decision"),
+                {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "decision": decision,
+                },
+            )
+        except Exception as exc:
+            st.error(f"设备操作处理失败：{exc}")
+            return
+
+        st.session_state.device_notice = response["message"]
+        st.rerun()
+
+
+def stream_answer(
+    payload: dict[str, Any],
+    sources: list[dict[str, Any]],
+    approval_holder: dict[str, Any],
+    status_box,
+) -> Iterator[str]:
     event_type = ""
     with httpx.Client(timeout=None) as client:
         with client.stream("POST", f"{API_BASE_URL}/api/v1/chat/stream", json=payload) as response:
@@ -74,6 +166,9 @@ def stream_answer(payload: dict[str, Any], sources: list[dict[str, Any]], status
                     sources.append(data)
                 elif event_type == "status":
                     status_box.caption(data.get("message", "处理中"))
+                elif event_type == "approval_required":
+                    approval_holder.update(data)
+                    status_box.caption("设备操作等待用户确认")
                 elif event_type == "error":
                     raise RuntimeError(data.get("message", "服务暂时不可用"))
                 elif event_type == "done":
@@ -194,11 +289,35 @@ with st.sidebar:
         on_click=start_new_session,
         args=(selector_key,),
     )
+try:
+    pending_action = api_get(
+        "/api/v1/device/actions/pending",
+        params={
+            "session_id": (st.session_state.session_id),
+            "user_id": user_id,
+        },
+    )
+except Exception:
+    pending_action = None
+    st.warning("暂时无法恢复待审批设备操作。")
+device_notice = st.session_state.pop(
+    "device_notice",
+    None,
+)
 
+if device_notice:
+    st.success(device_notice)
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         show_sources(message.get("sources", []))
+
+if isinstance(pending_action, dict):
+    show_pending_approval(
+        pending_action,
+        user_id=user_id,
+        session_id=(st.session_state.session_id),
+    )
 
 prompt = st.chat_input("例如：主刷总被宠物毛发缠住怎么办？")
 if prompt:
@@ -209,19 +328,27 @@ if prompt:
     with st.chat_message("assistant"):
         status_box = st.empty()
         captured_sources: list[dict[str, Any]] = []
+        captured_approval: dict[str, Any] = {}
         try:
             answer = st.write_stream(
                 stream_answer(
                     {
-                        "session_id": st.session_state.session_id,
+                        "session_id": (st.session_state.session_id),
                         "user_id": user_id,
                         "message": prompt,
                         "month": selected_month,
                     },
                     captured_sources,
+                    captured_approval,
                     status_box,
                 )
             )
+            if captured_approval:
+                answer = captured_approval.get(
+                    "message",
+                    "设备操作需要用户确认。",
+                )
+                st.markdown(answer)
             show_sources(captured_sources)
         except Exception as exc:
             answer = f"请求失败：{exc}"
@@ -229,3 +356,5 @@ if prompt:
         st.session_state.messages.append(
             {"role": "assistant", "content": answer, "sources": captured_sources}
         )
+        if captured_approval:
+            st.rerun()

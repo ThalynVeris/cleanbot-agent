@@ -12,7 +12,35 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
+  device-mcp:
+    build: .
+    command:
+      [
+        "uvicorn",
+        "cleanbot.device_mcp.server:create_app",
+        "--factory",
+        "--host=0.0.0.0",
+        "--port=8001",
+      ]
+    environment:
+      DATABASE_URL: postgresql+psycopg://cleanbot:cleanbot-dev-only@postgres:5432/cleanbot
+      DEVICE_MCP_TOKEN: ${DEVICE_MCP_TOKEN:-change-me-before-deployment}
+    expose:
+      - "8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   api:
     build: .
     environment:
@@ -20,13 +48,32 @@ services:
       DATABASE_URL: postgresql+psycopg://cleanbot:cleanbot-dev-only@postgres:5432/cleanbot
       VECTOR_DIR: /app/.runtime/chroma
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me-before-deployment}
+      DEVICE_MCP_URL: http://device-mcp:8001/mcp
+      DEVICE_MCP_TOKEN: ${DEVICE_MCP_TOKEN:-change-me-before-deployment}
+      DEVICE_CHECKPOINT_PATH: /app/.runtime/checkpoints/device-checkpoints.sqlite
+
     volumes:
       - chroma_data:/app/.runtime/chroma
       - ./data:/app/data:ro
+      - checkpoint_data:/app/.runtime/checkpoints
     ports:
       - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     depends_on:
       postgres:
+        condition: service_healthy
+      device-mcp:
         condition: service_healthy
 
   web:
@@ -37,9 +84,11 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
   chroma_data:
+  checkpoint_data:
 

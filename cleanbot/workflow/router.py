@@ -48,6 +48,45 @@ class IntentRouter:
         "如何使用这个客服",
     }
     GREETINGS = {"你好", "您好", "hi", "hello", "在吗", "谢谢", "再见"}
+    DEVICE_PHRASES = (
+        "查看设备状态",
+        "设备状态",
+        "当前状态",
+        "机器人状态",
+        "剩余电量",
+        "还剩多少电",
+        "还有多少电",
+        "查看耗材",
+        "耗材剩余",
+        "耗材还剩",
+        "耗材状态",
+        "开始清扫",
+        "开始打扫",
+        "启动清扫",
+        "暂停清扫",
+        "暂停打扫",
+        "返回充电座",
+        "回到充电座",
+        "立即回充",
+        "开始回充",
+    )
+
+    DEVICE_BLOCKERS = (
+        "为什么",
+        "怎么办",
+        "怎么解决",
+        "如何",
+        "注意",
+        "教程",
+        "介绍",
+        "说明",
+        "无法",
+        "不能",
+        "失败",
+        "故障",
+        "异常",
+        "不要",
+    )
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
         self.model = model
@@ -62,6 +101,11 @@ class IntentRouter:
             return Intent.SMALLTALK
         if normalized in self.GREETINGS:
             return Intent.SMALLTALK
+        has_device_phrase = any(phrase in message for phrase in self.DEVICE_PHRASES)
+        has_blocker = any(blocker in message for blocker in self.DEVICE_BLOCKERS)
+
+        if has_device_phrase and not has_blocker:
+            return Intent.DEVICE
         if any(word in message for word in self.ROBOT_WORDS):
             return Intent.KNOWLEDGE
         return None
@@ -75,7 +119,11 @@ class IntentRouter:
         try:
             response = await self.model.ainvoke(
                 """Classify the user's request for a cleaning-robot customer-service system.
-Allowed intents: knowledge, report, environment, smalltalk, out_of_scope.
+Allowed intents: knowledge, report, environment, device, smalltalk, out_of_scope.
+Use device only when the user wants to read or control their current
+simulated device.
+Questions about device faults, maintenance, instructions or product
+knowledge belong to knowledge, not device.
 Use knowledge only for cleaning robots, their purchase, use, maintenance, or troubleshooting.
 Return only one JSON object with exactly these fields:
 {"intent":"knowledge","reason":"brief classification reason"}

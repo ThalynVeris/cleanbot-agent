@@ -19,6 +19,9 @@ from cleanbot.core.schemas import (
     ChatRequest,
     ChatSessionSummary,
     DemoUser,
+    DeviceActionDecisionRequest,
+    DeviceActionDecisionResponse,
+    DeviceActionView,
     IngestResult,
     StoredMessage,
 )
@@ -38,9 +41,19 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         nonlocal selected_container
         configure_logging()
         selected_container = selected_container or get_container()
-        await asyncio.to_thread(selected_container.initialize)
-        application.state.container = selected_container
-        yield
+        try:
+            await asyncio.to_thread(selected_container.initialize)
+            application.state.container = selected_container
+            yield
+        finally:
+            close = getattr(
+                selected_container,
+                "close",
+                None,
+            )
+
+            if callable(close):
+                await asyncio.to_thread(close)
 
     app = FastAPI(
         title="CleanBot Agent API",
@@ -70,10 +83,15 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
         try:
             user_count = len(await asyncio.to_thread(current.database.list_users))
             chunk_count = await asyncio.to_thread(current.knowledge_base.count)
+            mcp_healthy = await current.device_mcp.health()
+
+            if not mcp_healthy:
+                raise RuntimeError("Device MCP is unhealthy")
             return {
                 "status": "ok" if user_count > 0 else "degraded",
                 "database": "ok" if user_count > 0 else "empty",
                 "vector_store": "ok" if chunk_count > 0 else "empty",
+                "device_mcp": "ok",
                 "users": user_count,
                 "chunks": chunk_count,
                 "collection": current.settings.collection_name,
@@ -97,6 +115,21 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
             },
         )
 
+    @app.get(
+        "/api/v1/device/actions/pending",
+        response_model=DeviceActionView | None,
+        tags=["device"],
+    )
+    async def pending_device_action(
+        session_id: str,
+        user_id: str,
+    ) -> DeviceActionView | None:
+        return await asyncio.to_thread(
+            services().database.get_pending_device_action,
+            session_id=session_id,
+            user_id=user_id,
+        )
+
     @app.get("/api/v1/sessions/{session_id}/messages", response_model=list[StoredMessage], tags=["chat"])
     async def session_messages(session_id: str) -> list[StoredMessage]:
         return await asyncio.to_thread(services().database.get_messages, session_id, 100)
@@ -112,6 +145,40 @@ def create_app(container: AppContainer | None = None) -> FastAPI:
     @app.get("/api/v1/demo/users/{user_id}/months", response_model=list[str], tags=["demo"])
     async def demo_months(user_id: str) -> list[str]:
         return await asyncio.to_thread(services().database.list_months, user_id)
+
+    @app.post(
+        ("/api/v1/device/actions/{action_id}/decision"),
+        response_model=(DeviceActionDecisionResponse),
+        tags=["device"],
+    )
+    async def decide_device_action(
+        action_id: str,
+        request: DeviceActionDecisionRequest,
+    ) -> DeviceActionDecisionResponse:
+        try:
+            outcome = await services().device_control.decide(
+                action_id=action_id,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                approve=(request.decision == "approve"),
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=("Device action is not available for this request"),
+            ) from exc
+
+        if outcome.action is None:
+            raise HTTPException(
+                status_code=500,
+                detail=("Device decision returned no action state"),
+            )
+
+        return DeviceActionDecisionResponse(
+            message=outcome.message,
+            action=outcome.action,
+            result=outcome.result,
+        )
 
     @app.post(
         "/api/v1/knowledge/documents",
