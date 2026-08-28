@@ -1,6 +1,6 @@
 # CleanBot Agent
 
-面向扫地/扫拖机器人的可评测智能客服原型。项目使用 LangGraph 显式工作流编排知识问答、设备月报、实时环境建议、闲聊和超范围拒答，并以 FastAPI + SSE 提供流式 API，Streamlit 只负责演示界面。
+面向扫地/扫拖机器人的可评测智能客服原型。项目使用 LangGraph 显式工作流编排知识问答、设备月报、实时环境建议、模拟设备控制、闲聊和超范围拒答，并以 FastAPI + SSE 提供流式 API，Streamlit 只负责演示界面。设备控制通过独立 MCP 服务执行，并在写操作前使用持久化检查点完成人工审批。
 
 > 这是使用演示数据构建的可部署原型，不是已接入真实设备、真实账号或生产流量的商业系统。
 
@@ -10,8 +10,8 @@
 - 60 条固定评测集上，向量基线 Hit@3 为 **98%**，混合检索 + `qwen3-rerank` 为 **100%**。
 - MRR@5 从 **0.9233** 提升到 **0.9367**；相应地，平均检索延迟从 **295.44 ms** 增加到 **577.51 ms**。
 - 路由评测为 60/60；10 条跨 6 类问题的分层答案抽样均成功生成并通过引用映射人工复核。
-- 21 项自动化测试全部通过，核心模块覆盖率 **84%**；其中包含模拟模型下的 10 会话并发隔离测试。
-- 真实 HTTP 冒烟测试和 Apple Silicon Docker Compose 验收已确认 SSE、会话落库、PostgreSQL 与持久化 Chroma 正常。
+- 71 项自动化测试全部通过，核心模块覆盖率 **87%**；其中包含模拟模型下的 10 会话并发隔离、设备所有权、审批恢复和 MCP 工具测试。
+- 真实 HTTP 冒烟测试和 Apple Silicon Docker Compose 验收已确认 SSE、会话落库、PostgreSQL、持久化 Chroma 与独立 Device MCP 服务正常。
 
 完整结果见 [评测报告](reports/evaluation/latest.md)。数字来自固定数据集实测，不代表生产 SLA。
 
@@ -25,6 +25,7 @@ flowchart LR
     ROUTER --> QA[Knowledge QA]
     ROUTER --> REPORT[Monthly report]
     ROUTER --> WEATHER[Environment advice]
+    ROUTER --> DEVICE[Simulated device control]
     QA --> HYBRID[Dense + BM25 + RRF]
     REPORT --> SQL[(SQLite / PostgreSQL)]
     REPORT --> HYBRID
@@ -34,6 +35,9 @@ flowchart LR
     HYBRID --> CHROMA[(Chroma)]
     GRAPH --> QWEN[Qwen chat model]
     GRAPH --> SQL
+    DEVICE --> APPROVAL[LangGraph interrupt / resume]
+    APPROVAL --> MCP[Device MCP service]
+    MCP --> SQL
 ```
 
 与原教程版相比，关键变化是：
@@ -45,7 +49,8 @@ flowchart LR
 | Top-3 后调用第二个模型概括，来源丢失 | Dense + BM25 + RRF + Rerank，来源全程保留 |
 | 随机用户、月份、城市和固定天气 | 固定演示用户/月报，Open-Meteo 实时天气和失败降级 |
 | 通过空工具修改报告上下文 | LangGraph 状态与条件边显式控制报告流程 |
-| 无依赖锁、测试、API、部署 | 锁定依赖、FastAPI/SSE、84% 核心覆盖率、Docker Compose |
+| 无依赖锁、测试、API、部署 | 锁定依赖、FastAPI/SSE、87% 核心覆盖率、Docker Compose |
+| 模型可直接触发设备写操作 | 模拟设备 MCP + 持久化审批 + 操作审计，批准后才执行 |
 
 ## 本地运行
 
@@ -115,6 +120,7 @@ streamlit run app.py --server.port 8501
 ```dotenv
 DASHSCOPE_API_KEY=你的Key
 ADMIN_TOKEN=替换为随机长字符串
+DEVICE_MCP_TOKEN=替换为另一个随机长字符串
 ```
 
 随后运行：
@@ -123,7 +129,7 @@ ADMIN_TOKEN=替换为随机长字符串
 docker compose up --build
 ```
 
-Compose 会启动 `web + api + postgres`，首次启动自动创建 120 条演示月报并构建知识库。PostgreSQL 和 Chroma 都使用持久化卷。该流程已在 Apple Silicon + Docker 29.6.2 上从空卷验证；项目不需要 Kubernetes。
+Compose 会启动 `web + api + device-mcp + postgres`，首次启动自动创建演示用户、模拟设备和 120 条月报，并构建知识库。PostgreSQL、Chroma 和 LangGraph 设备审批检查点都使用持久化卷。该流程已在 Apple Silicon + Docker 29.6.2 上从空卷验证；项目不需要 Kubernetes。
 
 ## API
 
@@ -132,9 +138,11 @@ Compose 会启动 `web + api + postgres`，首次启动自动创建 120 条演�
 | `POST /api/v1/chat/stream` | 输入 `session_id/user_id/message/month`，返回 SSE |
 | `GET /api/v1/sessions/{id}/messages` | 恢复持久化会话 |
 | `GET /api/v1/demo/users` | 获取明确标记的演示用户 |
+| `GET /api/v1/device/actions/pending` | 按用户和会话恢复待审批设备操作 |
+| `POST /api/v1/device/actions/{id}/decision` | 批准或拒绝模拟设备写操作 |
 | `POST /api/v1/knowledge/documents` | 使用 `X-Admin-Token` 上传 TXT/PDF |
 | `DELETE /api/v1/knowledge/documents/{id}` | 删除文档及其向量切片 |
-| `GET /health` | 检查数据库、向量库、用户数与切片数 |
+| `GET /health` | 检查数据库、向量库、Device MCP、用户数与切片数 |
 
 示例：
 
@@ -161,6 +169,7 @@ cleanbot/
   api/          FastAPI、SSE、上传与健康检查
   core/         配置、模型工厂、结构化 schema、日志
   db/           SQLAlchemy 模型与仓储
+  device_mcp/   模拟设备 MCP Server、Client 与协议边界
   evaluation/   固定评测执行器
   rag/          结构化切分、Chroma、BM25/RRF/Rerank
   tools/        外部天气服务适配器
@@ -175,9 +184,11 @@ docs/           中文学习与面试手册
 ## 已知边界
 
 - Demo 身份由界面选择，不是企业鉴权系统；知识库管理端点只有单一管理员令牌。
+- 设备数据和操作都是模拟的；MCP 使用内部共享令牌，不等价于真实厂商设备云或企业 OAuth。
+- 设备审批检查点当前使用持久化 SQLite，适合单 API 实例；多副本部署应迁移至 PostgreSQL Checkpointer。
 - Chroma 采用单实例本地持久化，适合原型，不宣称分布式或高可用。
 - 答案级评测仅分层抽样 10 条，生成器与 Judge 使用同一供应商；100% 忠实度/相关性只作辅助信号，不能写成“答案准确率”。
 - 混合检索提升了本数据集效果，也增加了约 282.07 ms 平均延迟。上线前应按业务错误成本决定是否对所有问题启用 Rerank。
 - 10 会话并发测试使用模拟模型验证状态隔离，不能等价为真实 API 吞吐或生产并发能力。
 
-项目原理、代码链路、30 天学习安排和面试问答见 [项目精讲与面试手册](docs/项目精讲与面试手册.md)。
+项目原理、代码链路、28 天求职冲刺安排和面试问答见 [项目精讲与面试手册](docs/项目精讲与面试手册.md)。
