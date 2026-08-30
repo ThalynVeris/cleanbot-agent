@@ -7,13 +7,12 @@
 ## 已验证结果
 
 - 6 份 TXT/PDF 资料被解析为 913 个带文档 ID、章节和页码的结构化切片。
-- 60 条固定评测集上，向量基线 Hit@3 为 **98%**，混合检索 + `qwen3-rerank` 为 **100%**。
-- MRR@5 从 **0.9233** 提升到 **0.9367**；相应地，平均检索延迟从 **295.44 ms** 增加到 **577.51 ms**。
-- 路由评测为 60/60；10 条跨 6 类问题的分层答案抽样均成功生成并通过引用映射人工复核。
+- 60 条验证集（50 条知识检索题、10 条路由题）用于检索方案与参数选择；条件 Rerank 方案将 Hit@3 从 **98%** 提升至 **100%**，MRR@5 从 **0.9233** 提升至 **0.9800**。
+- 20 条冻结测试集（16 条知识检索题、4 条路由题）不参与调参；混合检索 + 条件 Rerank 相较 Dense 基线将 Hit@3 从 **62.50%** 提升至 **81.25%**，MRR@5 从 **0.5625** 提升至 **0.7865**，全量意图路由准确率为 **95%（19/20）**。
 - 71 项自动化测试全部通过，核心模块覆盖率 **87%**；其中包含模拟模型下的 10 会话并发隔离、设备所有权、审批恢复和 MCP 工具测试。
 - 真实 HTTP 冒烟测试和 Apple Silicon Docker Compose 验收已确认 SSE、会话落库、PostgreSQL、持久化 Chroma 与独立 Device MCP 服务正常。
 
-完整结果见 [评测报告](reports/evaluation/latest.md)。数字来自固定数据集实测，不代表生产 SLA。
+完整结果见[验证集（全量 Rerank）](reports/evaluation/development_always.md)、[验证集（条件 Rerank）](reports/evaluation/development_disagreement.md)和[冻结测试集](reports/evaluation/heldout_final.md)。数字来自固定数据集的单次实测，不代表生产 SLA。
 
 ## 架构
 
@@ -157,10 +156,30 @@ curl -N http://127.0.0.1:8000/api/v1/chat/stream \
 ```bash
 ruff check cleanbot app.py tests
 pytest --cov=cleanbot --cov-report=term-missing
-python -m cleanbot.evaluation --answer-sample-size 10
+
+# 验证集：全量 Rerank
+ENABLE_RERANK=true RERANK_POLICY=always python -m cleanbot.evaluation \
+  --dataset evaluation/questions.jsonl \
+  --answer-sample-size 0 \
+  --json-output reports/evaluation/development_always.json \
+  --markdown-output reports/evaluation/development_always.md
+
+# 验证集：Dense 与 BM25 第一名不一致时才 Rerank
+ENABLE_RERANK=true RERANK_POLICY=disagreement python -m cleanbot.evaluation \
+  --dataset evaluation/questions.jsonl \
+  --answer-sample-size 0 \
+  --json-output reports/evaluation/development_disagreement.json \
+  --markdown-output reports/evaluation/development_disagreement.md
+
+# 冻结测试集：仅用于独立复现，不根据结果继续调参
+ENABLE_RERANK=true RERANK_POLICY=disagreement python -m cleanbot.evaluation \
+  --dataset evaluation/heldout.jsonl \
+  --answer-sample-size 0 \
+  --json-output reports/evaluation/heldout_final.json \
+  --markdown-output reports/evaluation/heldout_final.md
 ```
 
-评测集位于 `evaluation/questions.jsonl`，包含 50 条知识检索题和 10 条路由题。答案评测会按题型分层抽取 10 条，保存实际回答、引用和 Judge 解释供人工复核。每条知识题有人工维护的相关文本标记；不要边看测试集边调参数后又把它称为“持出集”。继续扩展时应划分开发集和真正的冻结测试集。
+`evaluation/questions.jsonl` 是 60 条验证集，用于方案选择和参数调试；`evaluation/heldout.jsonl` 是 20 条冻结测试集，不参与逐题调参。每条知识题都有人工维护的相关文本标记。项目没有使用这些问题更新模型参数，因此不把它们称为“训练集”。
 
 ## 目录
 
@@ -174,7 +193,7 @@ cleanbot/
   rag/          结构化切分、Chroma、BM25/RRF/Rerank
   tools/        外部天气服务适配器
   workflow/     LangGraph、意图路由、流式服务
-evaluation/     60 条人工检查数据
+evaluation/     60 条验证集 + 20 条冻结测试集
 tests/          单元与集成测试
 docs/           中文学习与面试手册
 ```
@@ -188,7 +207,7 @@ docs/           中文学习与面试手册
 - 设备审批检查点当前使用持久化 SQLite，适合单 API 实例；多副本部署应迁移至 PostgreSQL Checkpointer。
 - Chroma 采用单实例本地持久化，适合原型，不宣称分布式或高可用。
 - 答案级评测仅分层抽样 10 条，生成器与 Judge 使用同一供应商；100% 忠实度/相关性只作辅助信号，不能写成“答案准确率”。
-- 混合检索提升了本数据集效果，也增加了约 282.07 ms 平均延迟。上线前应按业务错误成本决定是否对所有问题启用 Rerank。
+- 冻结测试集上，混合检索 + 条件 Rerank 的平均延迟由 382.88 ms 增至 637.93 ms；这是受外部 API 和网络波动影响的单次结果，不代表生产 SLA。
 - 10 会话并发测试使用模拟模型验证状态隔离，不能等价为真实 API 吞吐或生产并发能力。
 
 项目原理、代码链路、28 天求职冲刺安排和面试问答见 [项目精讲与面试手册](docs/项目精讲与面试手册.md)。
