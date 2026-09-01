@@ -72,4 +72,4 @@ curl http://127.0.0.1:8000/health
 - 71 项自动化测试通过，核心覆盖率 `87%`。
 - Docker Compose 已验证 `web + api + device-mcp + postgres` 四项服务及持久化卷。
 
-详细指标见[冻结测试集报告](../reports/evaluation/heldout_final.md)，完整设计取舍见[项目精讲与面试手册](项目精讲与面试手册.md)。
+详细指标见[定量评测报告](EVALUATION.md)，组件关系、时序与数据模型见[系统架构设计](ARCHITECTURE.md)。

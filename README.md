@@ -4,11 +4,12 @@
 ![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-SSE-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-workflow-1C3C3C)
+![MCP](https://img.shields.io/badge/MCP-device%20tools-6C5CE7)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 
-面向扫地/扫拖机器人的可评测智能客服原型。项目使用 LangGraph 显式工作流编排知识问答、设备月报、实时环境建议、模拟设备控制、闲聊和超范围拒答，并以 FastAPI + SSE 提供流式 API，Streamlit 只负责演示界面。设备控制通过独立 MCP 服务执行，并在写操作前使用持久化检查点完成人工审批。
+CleanBot 是面向扫地/扫拖机器人的可评测智能客服 Agent。系统以 LangGraph 编排知识问答、设备月报、环境建议、模拟设备控制、闲聊和超范围拒答六类流程；以 Hybrid RAG 提供可追溯回答；通过 FastAPI + SSE 对外提供流式接口，并使用独立 MCP 服务隔离设备操作。
 
-> 这是使用演示数据构建的可部署原型，不是已接入真实设备、真实账号或生产流量的商业系统。
+> 本项目是使用演示数据和模拟设备构建的单实例可部署原型，不代表已接入真实账号、真实硬件或生产流量。
 
 ## Demo
 
@@ -16,7 +17,7 @@
   <img src="docs/assets/demo/knowledge-qa.jpg" alt="CleanBot 混合检索知识问答与来源引用" width="100%">
 </p>
 
-<p align="center"><strong>Hybrid RAG 知识问答：流式输出、模型耗时与 Token 统计、可追溯来源</strong></p>
+<p align="center"><strong>Hybrid RAG 知识问答：流式输出、耗时与 Token 统计、可追溯来源</strong></p>
 
 | 结构化设备月报 | MCP 设备操作审批 |
 |---|---|
@@ -26,214 +27,186 @@
 | 审批后状态变更 | FastAPI OpenAPI 文档 |
 |---|---|
 | [![审批后状态变更](docs/assets/demo/device-approved.jpg)](docs/assets/demo/device-approved.jpg) | [![FastAPI OpenAPI 文档](docs/assets/demo/api-docs.jpg)](docs/assets/demo/api-docs.jpg) |
-| 所有权、幂等和操作审计 | SSE、会话、设备和知识库接口 |
+| 所有权、幂等与操作审计 | SSE、会话、设备和知识库接口 |
 
-完整场景说明、演示问题和五分钟验收流程见 **[Demo 展示页](docs/DEMO.md)**。
+完整的演示问题和五分钟验收流程见 **[Demo 展示页](docs/DEMO.md)**。
 
-## 已验证结果
+## 核心能力
 
-- 6 份 TXT/PDF 资料被解析为 913 个带文档 ID、章节和页码的结构化切片。
-- 60 条验证集（50 条知识检索题、10 条路由题）用于检索方案与参数选择；条件 Rerank 方案将 Hit@3 从 **98%** 提升至 **100%**，MRR@5 从 **0.9233** 提升至 **0.9800**。
-- 20 条冻结测试集（16 条知识检索题、4 条路由题）不参与调参；混合检索 + 条件 Rerank 相较 Dense 基线将 Hit@3 从 **62.50%** 提升至 **81.25%**，MRR@5 从 **0.5625** 提升至 **0.7865**，全量意图路由准确率为 **95%（19/20）**。
-- 71 项自动化测试全部通过，核心模块覆盖率 **87%**；其中包含模拟模型下的 10 会话并发隔离、设备所有权、审批恢复和 MCP 工具测试。
-- 真实 HTTP 冒烟测试和 Apple Silicon Docker Compose 验收已确认 SSE、会话落库、PostgreSQL、持久化 Chroma 与独立 Device MCP 服务正常。
+| 能力 | 实现 |
+|---|---|
+| 显式 Agent 工作流 | LangGraph 状态图划分六类意图，确定性节点负责结构化查询、工具调用与失败分支 |
+| 多轮与结构化数据 | PostgreSQL/SQLite 持久化用户、会话、消息和月报；加载最近 12 条消息完成指代消解 |
+| 可评测 Hybrid RAG | 标题/问答优先切分，Dense + 中文 BM25 双路召回，RRF 融合与条件 Rerank，回答保留来源 |
+| MCP 与人工审批 | 独立 Device MCP 提供 5 个工具和设备能力 Resource；写操作经持久化审批后执行 |
+| API 与可观测性 | FastAPI、Pydantic 和 SSE；记录请求 ID、首 Token、总耗时、模型调用与可用 Token 统计 |
+| 工程交付 | Python 3.10、锁定依赖、SQLAlchemy、Docker Compose、GitHub Actions、自动化测试与故障降级 |
 
-完整结果见[验证集（全量 Rerank）](reports/evaluation/development_always.md)、[验证集（条件 Rerank）](reports/evaluation/development_disagreement.md)和[冻结测试集](reports/evaluation/heldout_final.md)。数字来自固定数据集的单次实测，不代表生产 SLA。
+## 量化结果
 
-## 架构
+### 条件 Rerank 策略选择（60 条验证集）
+
+| 策略 | Hit@3 | MRR@5 | 平均检索延迟 | P95 检索延迟 | Rerank 调用 |
+|---|---:|---:|---:|---:|---:|
+| Always Rerank | 100.00% | 0.9367 | 770.11 ms | 993.72 ms | 50 |
+| Conditional Rerank | 100.00% | 0.9800 | 560.09 ms | 794.37 ms | 24 |
+
+在该次验证实验中，条件策略保持 Hit@3 不变，同时将 Rerank 调用减少 **52%**、平均检索延迟降低约 **27.3%**，因此选为最终策略。
+
+### 独立结果（20 条冻结测试集）
+
+| 方案 | Hit@3 | MRR@5 | 平均检索延迟 | P95 检索延迟 |
+|---|---:|---:|---:|---:|
+| Dense Baseline | 62.50% | 0.5625 | 382.88 ms | 407.80 ms |
+| Hybrid + Conditional Rerank | 81.25% | 0.7865 | 637.93 ms | 802.97 ms |
+
+Hybrid RAG 将 Hit@3 提升 **18.75 个百分点**、MRR@5 提升 **0.2240**；代价是平均检索延迟增加 255.05 ms。全量意图识别准确率为 **95%（19/20）**，引用字段映射正确率为 **100%**。结果来自固定数据集的单次外部 API 实测，不代表生产 SLA。
+
+实验设计、限制与原始结果见 **[评测报告](docs/EVALUATION.md)**。
+
+## 架构总览
 
 ```mermaid
 flowchart LR
-    UI[Streamlit Web] -->|HTTP + SSE| API[FastAPI]
-    API --> GRAPH[LangGraph workflow]
-    GRAPH --> ROUTER{Intent router}
-    ROUTER --> QA[Knowledge QA]
-    ROUTER --> REPORT[Monthly report]
-    ROUTER --> WEATHER[Environment advice]
-    ROUTER --> DEVICE[Simulated device control]
-    QA --> HYBRID[Dense + BM25 + RRF]
-    REPORT --> SQL[(SQLite / PostgreSQL)]
-    REPORT --> HYBRID
-    WEATHER --> OPENMETEO[Open-Meteo]
-    WEATHER --> HYBRID
-    HYBRID --> RERANK[qwen3-rerank]
-    HYBRID --> CHROMA[(Chroma)]
-    GRAPH --> QWEN[Qwen chat model]
-    GRAPH --> SQL
-    DEVICE --> APPROVAL[LangGraph interrupt / resume]
-    APPROVAL --> MCP[Device MCP service]
-    MCP --> SQL
+    User["用户"] -->|浏览器| Web["Streamlit Web"]
+    Admin["管理员"] -->|文档管理| API
+    Web -->|HTTP + SSE| API["FastAPI API"]
+
+    subgraph Core["CleanBot 应用层"]
+        API --> Service["AgentService"]
+        Service --> Graph["LangGraph Workflow"]
+        Graph --> RAG["Hybrid RAG"]
+        Graph --> Device["Device Control"]
+    end
+
+    RAG --> Chroma[("Chroma Volume")]
+    Service --> Postgres[("PostgreSQL")]
+    Device --> Checkpoint[("SQLite Checkpoint Volume")]
+    Device -->|Streamable HTTP| MCP["Device MCP Service"]
+    MCP --> Postgres
+    Graph -->|Chat / Embedding / Rerank| Qwen["Alibaba Cloud Model Studio"]
+    Graph -->|实时天气| Weather["Open-Meteo"]
 ```
 
-与原教程版相比，关键变化是：
+进一步查看 **[系统架构设计](docs/ARCHITECTURE.md)**：其中包含系统上下文图、容器部署图、组件图、知识问答与设备审批时序图、ER 数据模型图及工程保障说明。
 
-| 教程版 | 当前版本 |
-|---|---|
-| UI 有历史记录，模型只收到本轮问题 | 会话和消息持久化，工作流加载最近 12 条消息 |
-| 相对路径产生三个 Chroma 库 | 项目绝对路径，只保留一个版本化集合 |
-| Top-3 后调用第二个模型概括，来源丢失 | Dense + BM25 + RRF + Rerank，来源全程保留 |
-| 随机用户、月份、城市和固定天气 | 固定演示用户/月报，Open-Meteo 实时天气和失败降级 |
-| 通过空工具修改报告上下文 | LangGraph 状态与条件边显式控制报告流程 |
-| 无依赖锁、测试、API、部署 | 锁定依赖、FastAPI/SSE、87% 核心覆盖率、Docker Compose |
-| 模型可直接触发设备写操作 | 模拟设备 MCP + 持久化审批 + 操作审计，批准后才执行 |
+## Docker 快速启动
 
-## 本地运行
-
-### 1. 安装依赖
-
-项目在 Python 3.10 下验证。当前电脑可继续使用 `Agent` Conda 环境：
-
-```bash
-conda activate Agent
-python -m pip install -r requirements.lock
-python -m pip install --no-deps -e .
-```
-
-复制环境变量示例，并填写自己的百炼 API Key：
+### 1. 准备环境变量
 
 ```bash
 cp .env.example .env
-export DASHSCOPE_API_KEY="你的 Key"
 ```
 
-程序只从环境变量读取密钥，不要将 `.env` 或 Key 提交到仓库。
-
-### 2. 初始化数据与知识库
-
-```bash
-python -m cleanbot.cli init-db
-python -m cleanbot.cli ingest
-python -m cleanbot.cli health
-```
-
-第二次执行 `ingest` 应全部显示 `unchanged`。修改源文件后只重建对应文档；删除操作会同时删除文档登记和向量切片。
-
-### 3. 启动两个进程
-
-推荐使用项目脚本。`run_web.sh` 会把本地 API 固定为 `127.0.0.1:8000`，并绕过系统/VPN HTTP 代理。
-
-终端一：
-
-```bash
-./scripts/run_api.sh
-```
-
-终端二：
-
-```bash
-./scripts/run_web.sh
-```
-
-也可以手动启动。终端一：
-
-```bash
-uvicorn cleanbot.api.app:app --host 127.0.0.1 --port 8000 --reload
-```
-
-终端二：
-
-```bash
-streamlit run app.py --server.port 8501
-```
-
-访问 `http://localhost:8501`。API 文档位于 `http://localhost:8000/docs`。
-
-## Docker 运行
-
-需要 Docker Desktop for Mac 的 Apple silicon 版本。编辑 `.env`，至少配置：
+至少在 `.env` 中配置：
 
 ```dotenv
-DASHSCOPE_API_KEY=你的Key
+DASHSCOPE_API_KEY=你的百炼APIKey
 ADMIN_TOKEN=替换为随机长字符串
 DEVICE_MCP_TOKEN=替换为另一个随机长字符串
 ```
 
-随后运行：
+### 2. 启动完整系统
 
 ```bash
-docker compose up --build
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1:8000/health
 ```
 
-Compose 会启动 `web + api + device-mcp + postgres`，首次启动自动创建演示用户、模拟设备和 120 条月报，并构建知识库。PostgreSQL、Chroma 和 LangGraph 设备审批检查点都使用持久化卷。该流程已在 Apple Silicon + Docker 29.6.2 上从空卷验证；项目不需要 Kubernetes。
+Compose 启动 `web + api + device-mcp + postgres` 四个服务。首次启动会初始化演示用户、模拟设备、120 条月报和知识库；PostgreSQL、Chroma 与 LangGraph 审批检查点使用独立持久化卷。
+
+- Streamlit：<http://127.0.0.1:8501>
+- FastAPI 文档：<http://127.0.0.1:8000/docs>
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+不要增加 `-v`，否则会同时删除持久化卷。
+
+## 原生开发运行
+
+项目在 Python 3.10 下验证：
+
+```bash
+python -m pip install -r requirements.lock
+python -m pip install --no-deps -e .
+python -m cleanbot.cli init-db
+python -m cleanbot.cli ingest
+```
+
+分别启动 API 和 Web：
+
+```bash
+./scripts/run_api.sh
+./scripts/run_web.sh
+```
+
+脚本会让本地服务绕过常见的系统/VPN HTTP 代理设置。原生模式默认使用 SQLite 和嵌入式 Chroma；Docker 模式使用 PostgreSQL，并通过独立 Device MCP 容器执行模拟设备工具。
 
 ## API
 
 | 方法与路径 | 用途 |
 |---|---|
-| `POST /api/v1/chat/stream` | 输入 `session_id/user_id/message/month`，返回 SSE |
-| `GET /api/v1/sessions/{id}/messages` | 恢复持久化会话 |
-| `GET /api/v1/demo/users` | 获取明确标记的演示用户 |
-| `GET /api/v1/device/actions/pending` | 按用户和会话恢复待审批设备操作 |
+| `POST /api/v1/chat/stream` | 输入 `session_id/user_id/message/month`，返回 SSE 事件流 |
+| `GET /api/v1/sessions/{id}/messages` | 恢复持久化会话消息 |
+| `GET /api/v1/demo/users/{id}/sessions` | 获取演示用户的历史会话 |
+| `GET /api/v1/device/actions/pending` | 按用户和会话恢复待审批操作 |
 | `POST /api/v1/device/actions/{id}/decision` | 批准或拒绝模拟设备写操作 |
 | `POST /api/v1/knowledge/documents` | 使用 `X-Admin-Token` 上传 TXT/PDF |
 | `DELETE /api/v1/knowledge/documents/{id}` | 删除文档及其向量切片 |
 | `GET /health` | 检查数据库、向量库、Device MCP、用户数与切片数 |
 
-示例：
+聊天接口事件顺序为 `status → source → token → done`；设备写操作增加 `approval_required`，异常链路以完整的 `error` 事件结束。
+
+## 测试与复现实验
 
 ```bash
-curl -N http://127.0.0.1:8000/api/v1/chat/stream \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"demo-session-001","user_id":"1003","message":"主刷被宠物毛发缠住怎么办？","month":"2025-03"}'
+python -m ruff check cleanbot tests app.py
+python -m pytest --cov=cleanbot --cov-report=term-missing --cov-fail-under=80
 ```
 
-## 测试与评测
+当前共 **71 项自动化测试**，核心模块覆盖率 **87%**。测试包含多轮会话隔离、10 个并发模拟会话、检索融合与 Rerank 回退、文档幂等更新删除、天气降级、MCP 协议、设备所有权和审批恢复。
 
-```bash
-ruff check cleanbot app.py tests
-pytest --cov=cleanbot --cov-report=term-missing
+复现实验命令、数据划分、参数和统计口径见 [评测报告](docs/EVALUATION.md)。
 
-# 验证集：全量 Rerank
-ENABLE_RERANK=true RERANK_POLICY=always python -m cleanbot.evaluation \
-  --dataset evaluation/questions.jsonl \
-  --answer-sample-size 0 \
-  --json-output reports/evaluation/development_always.json \
-  --markdown-output reports/evaluation/development_always.md
-
-# 验证集：Dense 与 BM25 第一名不一致时才 Rerank
-ENABLE_RERANK=true RERANK_POLICY=disagreement python -m cleanbot.evaluation \
-  --dataset evaluation/questions.jsonl \
-  --answer-sample-size 0 \
-  --json-output reports/evaluation/development_disagreement.json \
-  --markdown-output reports/evaluation/development_disagreement.md
-
-# 冻结测试集：仅用于独立复现，不根据结果继续调参
-ENABLE_RERANK=true RERANK_POLICY=disagreement python -m cleanbot.evaluation \
-  --dataset evaluation/heldout.jsonl \
-  --answer-sample-size 0 \
-  --json-output reports/evaluation/heldout_final.json \
-  --markdown-output reports/evaluation/heldout_final.md
-```
-
-`evaluation/questions.jsonl` 是 60 条验证集，用于方案选择和参数调试；`evaluation/heldout.jsonl` 是 20 条冻结测试集，不参与逐题调参。每条知识题都有人工维护的相关文本标记。项目没有使用这些问题更新模型参数，因此不把它们称为“训练集”。
-
-## 目录
+## 项目结构
 
 ```text
 cleanbot/
   api/          FastAPI、SSE、上传与健康检查
-  core/         配置、模型工厂、结构化 schema、日志
-  db/           SQLAlchemy 模型与仓储
+  core/         配置、模型工厂、Pydantic Schema、日志
+  db/           SQLAlchemy 模型与数据访问层
   device_mcp/   模拟设备 MCP Server、Client 与协议边界
   evaluation/   固定评测执行器
-  rag/          结构化切分、Chroma、BM25/RRF/Rerank
+  rag/          结构化切分、Chroma、BM25、RRF 与 Rerank
   tools/        外部天气服务适配器
-  workflow/     LangGraph、意图路由、流式服务
-evaluation/     60 条验证集 + 20 条冻结测试集
-tests/          单元与集成测试
-docs/           中文学习与面试手册
+  workflow/     LangGraph、意图路由、审批与流式服务
+data/           6 份扫地机器人领域资料
+evaluation/     60 条验证集与 20 条冻结测试集
+reports/        三份可复现的正式评测结果
+tests/          单元测试与集成测试
+docs/           Demo、架构设计与评测说明
 ```
-
-根目录原有的 `agent/`、`rag/`、`model/`、`utils/` 保留为教程版对照代码，运行入口不再引用它们。正式讲解应以 `cleanbot/` 为准。
 
 ## 已知边界
 
-- Demo 身份由界面选择，不是企业鉴权系统；知识库管理端点只有单一管理员令牌。
-- 设备数据和操作都是模拟的；MCP 使用内部共享令牌，不等价于真实厂商设备云或企业 OAuth。
-- 设备审批检查点当前使用持久化 SQLite，适合单 API 实例；多副本部署应迁移至 PostgreSQL Checkpointer。
-- Chroma 采用单实例本地持久化，适合原型，不宣称分布式或高可用。
-- 答案级评测仅分层抽样 10 条，生成器与 Judge 使用同一供应商；100% 忠实度/相关性只作辅助信号，不能写成“答案准确率”。
-- 冻结测试集上，混合检索 + 条件 Rerank 的平均延迟由 382.88 ms 增至 637.93 ms；这是受外部 API 和网络波动影响的单次结果，不代表生产 SLA。
-- 10 会话并发测试使用模拟模型验证状态隔离，不能等价为真实 API 吞吐或生产并发能力。
+- Demo 身份由界面选择，不是企业登录鉴权；知识库管理端点使用单一管理员令牌。
+- 设备与操作均为模拟数据；MCP 内部共享令牌不等价于真实设备云或企业 OAuth。
+- 审批 Checkpointer 使用持久化 SQLite，适合单 API 实例；多副本部署需更换共享 Checkpointer。
+- Chroma 采用 API 容器内的单实例持久化目录，不宣称分布式、高可用或多 Worker 并行写入。
+- 冻结测试集 Hit@3 为 81.25%，尚未达到 85% 的预设目标；项目保留该真实结果。
+- 10 会话并发测试使用模拟模型验证状态隔离，不能等价为真实模型吞吐或生产并发能力。
+- 生成回答的 10 条抽样评测使用同供应商模型作为 Judge，存在同源偏差，仅作为辅助信号。
 
-项目原理、代码链路、28 天求职冲刺安排和面试问答见 [项目精讲与面试手册](docs/项目精讲与面试手册.md)。
+## 文档导航
+
+- [Demo 展示与验收](docs/DEMO.md)
+- [系统架构设计](docs/ARCHITECTURE.md)
+- [定量评测报告](docs/EVALUATION.md)
+- [验证集：Always Rerank](reports/evaluation/development_always.md)
+- [验证集：Conditional Rerank](reports/evaluation/development_disagreement.md)
+- [冻结测试集](reports/evaluation/heldout_final.md)
