@@ -18,7 +18,8 @@ logs/
 *.db
 *.sqlite3
 practice_day*.py
+output/
+tmp/
 
 # Local evaluation output may contain model responses.
 reports/evaluation/*.json
-!reports/evaluation/.gitkeep
