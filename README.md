@@ -1,8 +1,34 @@
 # CleanBot Agent
 
+[![CI](https://github.com/ThalynVeris/cleanbot-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ThalynVeris/cleanbot-agent/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-SSE-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-workflow-1C3C3C)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+
 面向扫地/扫拖机器人的可评测智能客服原型。项目使用 LangGraph 显式工作流编排知识问答、设备月报、实时环境建议、模拟设备控制、闲聊和超范围拒答，并以 FastAPI + SSE 提供流式 API，Streamlit 只负责演示界面。设备控制通过独立 MCP 服务执行，并在写操作前使用持久化检查点完成人工审批。
 
 > 这是使用演示数据构建的可部署原型，不是已接入真实设备、真实账号或生产流量的商业系统。
+
+## Demo
+
+<p align="center">
+  <img src="docs/assets/demo/knowledge-qa.jpg" alt="CleanBot 混合检索知识问答与来源引用" width="100%">
+</p>
+
+<p align="center"><strong>Hybrid RAG 知识问答：流式输出、模型耗时与 Token 统计、可追溯来源</strong></p>
+
+| 结构化设备月报 | MCP 设备操作审批 |
+|---|---|
+| [![结构化设备月报](docs/assets/demo/monthly-report.jpg)](docs/assets/demo/monthly-report.jpg) | [![MCP 设备操作审批](docs/assets/demo/device-approval.jpg)](docs/assets/demo/device-approval.jpg) |
+| SQL 结构化记录 + RAG 保养建议 | LangGraph 暂停/恢复 + 人工批准/拒绝 |
+
+| 审批后状态变更 | FastAPI OpenAPI 文档 |
+|---|---|
+| [![审批后状态变更](docs/assets/demo/device-approved.jpg)](docs/assets/demo/device-approved.jpg) | [![FastAPI OpenAPI 文档](docs/assets/demo/api-docs.jpg)](docs/assets/demo/api-docs.jpg) |
+| 所有权、幂等和操作审计 | SSE、会话、设备和知识库接口 |
+
+完整场景说明、演示问题和五分钟验收流程见 **[Demo 展示页](docs/DEMO.md)**。
 
 ## 已验证结果
 
