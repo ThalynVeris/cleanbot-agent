@@ -17,7 +17,7 @@ def _as_bool(value: str | None, default: bool) -> bool:
 
 
 def _as_rerank_policy(value: str | None) -> RerankPolicy:
-    policy = (value or "always").strip().lower()
+    policy = (value or "disagreement").strip().lower()
 
     if policy == "always":
         return "always"

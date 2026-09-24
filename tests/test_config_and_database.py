@@ -253,6 +253,18 @@ def test_device_action_keeps_auditable_relationships(
         assert action.approval_expires_at is not None
 
 
+def test_rerank_policy_defaults_to_evaluated_disagreement_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RERANK_POLICY", raising=False)
+    get_settings.cache_clear()
+
+    try:
+        assert get_settings().rerank_policy == "disagreement"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_invalid_rerank_policy_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

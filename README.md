@@ -207,6 +207,7 @@ docs/           Demo、架构设计与评测说明
 - [Demo 展示与验收](docs/DEMO.md)
 - [系统架构设计](docs/ARCHITECTURE.md)
 - [定量评测报告](docs/EVALUATION.md)
+- [学习与拓展路线](docs/learning/README.md)
 - [验证集：Always Rerank](reports/evaluation/development_always.md)
 - [验证集：Conditional Rerank](reports/evaluation/development_disagreement.md)
 - [冻结测试集](reports/evaluation/heldout_final.md)
