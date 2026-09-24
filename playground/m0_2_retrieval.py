@@ -1,4 +1,4 @@
-"""M0.2 手敲练习：对照 docs/learning/M0.2.md 第 4 节，边敲边写中文注释。
+"""M0.2 手敲练习：对照对话中给出的参考答案，边敲边写中文注释。
 
 完成后运行：python -m pytest playground/test_m0_2_retrieval.py -q
 """
@@ -11,7 +11,7 @@ from cleanbot.core.schemas import KnowledgeHit
 
 
 def tokenize_for_bm25(text: str) -> list[str]:
-    raise NotImplementedError("对照 M0.2.md 手敲实现")
+    raise NotImplementedError("对照参考答案手敲实现")
 
 
 def fuse_rrf(
@@ -19,4 +19,4 @@ def fuse_rrf(
     sparse: list[KnowledgeHit],
     rank_constant: int = 60,
 ) -> list[KnowledgeHit]:
-    raise NotImplementedError("对照 M0.2.md 手敲实现")
+    raise NotImplementedError("对照参考答案手敲实现")
